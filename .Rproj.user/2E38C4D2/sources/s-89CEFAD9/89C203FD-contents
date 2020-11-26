@@ -1,0 +1,56 @@
+library(MASS)
+
+options(contrasts = c("contr.treatment", "contr.poly"))
+house.plr <- polr(Sat ~ Infl + Type + Cont, weights = Freq, data = housing)
+house.plr
+summary(house.plr, digits = 3)
+## slightly worse fit from
+summary(update(house.plr, method = "probit", Hess = TRUE), digits = 3)
+## although it is not really appropriate, can fit
+summary(update(house.plr, method = "loglog", Hess = TRUE), digits = 3)
+summary(update(house.plr, method = "cloglog", Hess = TRUE), digits = 3)
+
+predict(house.plr, housing, type = "p")
+addterm(house.plr, ~.^2, test = "Chisq")
+house.plr2 <- stepAIC(house.plr, ~.^2)
+house.plr2$anova
+anova(house.plr, house.plr2)
+
+house.plr <- update(house.plr, Hess=TRUE)
+pr <- profile(house.plr)
+confint(pr)
+plot(pr)
+pairs(pr)
+
+
+# https://rpubs.com/rslbliss/r_logistic_ws
+# https://stats.idre.ucla.edu/r/faq/ologit-coefficients/
+
+house.plr$coefficients # koeficijenti, bez Interceptova
+house.plr$zeta # Interceptovi
+toprobdist = function(x) {
+  exp(x)/(1+exp(x))
+}
+toprobs = function(dprobs, nms) {
+  dprobs = c(dprobs, 1)
+  dprobs[2:length(dprobs)] = unlist(lapply(2:length(dprobs), function(i) dprobs[i]-dprobs[i-1]))
+  names(dprobs) = nms
+  dprobs
+}
+# vjerojatnosti outputa kad su svi prediktori 0 (prvi level)
+toprobs(toprobdist(house.plr$zeta), levels(housing$Sat))
+# vjerojatnosti outputa kad su svi prediktori 0 (prvi level) osim Infl koji je Medium
+toprobs(toprobdist(house.plr$zeta-coefficients(house.plr)["InflMedium"]), levels(housing$Sat))
+
+house.plr$edf # degrees of freedom = # of observations - # of parameters estimated
+
+sumtable = data.frame((summary(house.plr))$coefficients) # svi koeficijenti zajedno, i Interceptovi, zajedno s error i t value
+sumtable$p.value = pt(abs(sumtable$t.value), house.plr$nobs - house.plr$edf, lower.tail = FALSE) * 2
+sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
+sumtable[sumtable$p.value < .05, ]$signif = "*"
+sumtable[sumtable$p.value < .01, ]$signif = "**"
+sumtable[sumtable$p.value < .001, ]$signif = "***"
+
+sumtable
+
+

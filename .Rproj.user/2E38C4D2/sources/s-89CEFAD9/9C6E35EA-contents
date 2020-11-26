@@ -1,0 +1,9 @@
+install.packages(c("devtools", "roxygen2", "testthat", "knitr"))
+
+library(devtools)
+has_devel()
+
+library(roxygen2)
+library(testthat)
+devtools::session_info()
+
