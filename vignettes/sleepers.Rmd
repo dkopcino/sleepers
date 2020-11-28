@@ -30,28 +30,57 @@ library(haven)
 library(dplyr)
 
 experiment_data = read_sav('../inst/extdata/experiment_data.sav')
-# factorize all columns except task
-fact_columns = !(colnames(experiment_data) %in% c("task"))
+
+# perform data adjustment, factorization, normalization...
+
+# factorize all columns except task, duration and price
+fact_columns = setdiff(colnames(experiment_data), c("task", "duration", "price"))
 experiment_data[, fact_columns] = lapply(experiment_data[, fact_columns], factor)
-# relevel columns that have a natural ordering to make sure that the lowest number is the first level etc.
-experiment_data$duration = factor(
-  experiment_data$duration, 
-  levels = c("3 months", "6 months", "12 months"), 
-  ordered = TRUE
-)
-experiment_data$price = factor(
-  experiment_data$price,
-  levels = c("$20/month", "$30/month", "$40/month"),
-  ordered = TRUE
-)
+
+# now factorize duration and price, but create new columns, this is just for pretty printing
+experiment_data$duration_f = factor(experiment_data$duration)
+experiment_data$price_f = factor(experiment_data$price)
+
+# save factorized attributes columns names for later usage
+att_columns = setdiff(colnames(experiment_data), c("response_id", "task", "duration", "price", "answer"))
+
+# cast duration to numeric and normalize it to 0-1 range
+# duration has 3 values c("3 months", "6 months", "12 months") which are not equidistant
+# we want to capture this difference between the values and allow for other values too
+experiment_data$duration = as.numeric(unlist(lapply(str_split(experiment_data$duration, "[[:space:]]+month(s)*"), "[[", 1)))
+min_experiment_data_duration = min(experiment_data$duration)
+max_experiment_data_duration = max(experiment_data$duration)
+experiment_data$duration = (experiment_data$duration - min_experiment_data_duration)/(max_experiment_data_duration - min_experiment_data_duration)
+
+# cast price to numeric and normalize it to 0-1 range
+# price has 3 values c("$20/month", "$30/month", "$40/month") and these are equidistant
+# we want to capture the ordering of these values and allow for other values too
+experiment_data$price = as.numeric(gsub("\\$", "", unlist(lapply(str_split(experiment_data$price, "/month(s)*"), "[[", 1))))
+min_experiment_data_price = min(experiment_data$price)
+max_experiment_data_price = max(experiment_data$price)
+experiment_data$price = (experiment_data$price - min_experiment_data_price)/(max_experiment_data_price - min_experiment_data_price)
+
 # answer has only numbers and we want to have text descriptions
 levels(experiment_data$answer) = c("Very unlikely", "Somewhat unlikely", "Somewhat likely", "Very likely")
 experiment_data$answer = factor(experiment_data$answer, levels = c("Very unlikely", "Somewhat unlikely", "Somewhat likely", "Very likely"), ordered = TRUE)
 
-att_column_names = colnames(experiment_data)[!(colnames(experiment_data) %in% c("response_id", "task", "answer"))]
-r = lapply(att_column_names, function(cn) {
+# IMPORTANT: create a predict_transform function that will take new data given in the same format as 
+# experiment_data and perform adjustments as described above to be able to make predictions.
+predict_transform = function(new_data) {
+  for (cn in setdiff(fact_columns, "answer")) {
+    new_data[[cn]] = factor(new_data[[cn]], levels = levels(experiment_data[[cn]]))
+  }
+  new_data$duration = as.numeric(unlist(lapply(str_split(new_data$duration, "[[:space:]]+month(s)*"), "[[", 1)))
+  new_data$duration = (new_data$duration - min_experiment_data_duration)/(max_experiment_data_duration - min_experiment_data_duration)
+  new_data$price = as.numeric(gsub("\\$", "", unlist(lapply(str_split(new_data$price, "/month(s)*"), "[[", 1))))
+  new_data$price = (new_data$price - min_experiment_data_price)/(max_experiment_data_price - min_experiment_data_price)
+  new_data
+}
+
+# printout attributes and values
+r = lapply(att_columns, function(cn) {
   cn_levels = levels(experiment_data[[cn]])
-  print(paste0("Attribute ", cn, " (", length(cn_levels), " levels): ", paste(cn_levels, collapse = " | ")))
+  print(paste0("Attribute ", cn, " (", length(cn_levels), " values): ", paste(cn_levels, collapse = " | ")))
 })
 
 # just checking if every respondent answered the same number of questions > YES
@@ -68,7 +97,7 @@ Let's have a look at how many times each attribute was shown and the frequency d
 
 ```{r, echo = FALSE, error = FALSE, warning = FALSE}
 
-summary(experiment_data[, !(colnames(experiment_data) %in% c("response_id", "task"))])
+summary(experiment_data[, c(att_columns, "answer")])
 # here we also see that we don't have any NAs, missing data
 
 ```
@@ -92,6 +121,10 @@ for (cn in fact_columns_names) {
 }
 survey_data = survey_data_1
 
+
+ftable(xtabs(~ social_proof + price_f + answer, data = experiment_data))
+
+
 ```
 
 
@@ -107,7 +140,6 @@ As a first step in our analysis of the (experimental) survey data, we will make 
 ```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
 
 library(ggplot2)
-library(gghighlight)
 library(gridExtra)
 
 cutlabels10 = function(x) {
@@ -116,7 +148,6 @@ cutlabels10 = function(x) {
   x
 }
 
-rvars = colnames(experiment_data)[!(colnames(experiment_data) %in% c("response_id", "task", "answer"))]
 plot_rvar = function(rvar, df) {
   rank_1 = df[!is.na(df[[rvar]]), ] %>% group_by(get(rvar)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2))
   colnames(rank_1)[1] = rvar
@@ -125,7 +156,7 @@ plot_rvar = function(rvar, df) {
   label_fill[rank_1$avg_buying_intent == min(rank_1$avg_buying_intent)] = "pink"
   ggplot(data = rank_1, aes(x = get(rvar), y = avg_buying_intent)) + scale_x_discrete(labels = cutlabels10) + geom_col(fill = label_fill) + geom_text(aes(x = get(rvar), y = avg_buying_intent/2, label = rank_1$avg_buying_intent), data = rank_1, size = 3, colour = "white") + xlab(rvar) + theme(axis.text.x = element_text(size = 8), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())
 }
-ggi = lapply(rvars, plot_rvar, df = experiment_data)
+ggi = lapply(att_columns, plot_rvar, df = experiment_data)
 marrangeGrob(ggi, nrow = 3, ncol = 2)
 
 ```
@@ -140,7 +171,7 @@ Let's also have a look at the average buying intents for different 2-combination
 
 ```{r echo= FALSE, warning = FALSE, message = FALSE}
 
-two_atts_combs = combn(x = rvars, m = 2)
+two_atts_combs = combn(x = att_columns, m = 2)
 ggi2 = lapply(1:ncol(two_atts_combs), function(two_atts_i) {
   two_atts = two_atts_combs[, two_atts_i]
   fst_att = two_atts[1]
@@ -175,14 +206,13 @@ We get the following summary:
 
 library(MASS)
 
-# cast duration to numeric and zero-center it
-experiment_data$duration = as.numeric(experiment_data$duration) - mean(as.numeric(experiment_data$duration))
-# cast price to numeric and zero-center it
-experiment_data$price = as.numeric(experiment_data$price) - mean(as.numeric(experiment_data$price))
-
 options(contrasts = c("contr.treatment", "contr.poly"))
 sleepers.plr <- polr(answer ~ duration + offer + outcome + price + rtb + social_proof, data = experiment_data, Hess = TRUE)
+
+# save the model 
 saveRDS(sleepers.plr, "model_sleepers.plr.RDS")
+
+#logLik(sleepers.plr)
 
 # all coefficients together, intercepts too, with estimate, std. error and t value
 sumtable = data.frame((summary(sleepers.plr))$coefficients)
@@ -195,13 +225,33 @@ sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
 sumtable[sumtable$p.value < .05, ]$signif = "*"
 sumtable[sumtable$p.value < .01, ]$signif = "**"
 sumtable[sumtable$p.value < .001, ]$signif = "***"
+sumtable$odds_effect = exp(sumtable$Value)
+sumtable$explanation = "" # create a column
+odds_effect_minus_1 = sumtable$odds_effect - 1
+sumtable[odds_effect_minus_1 < 0, ]$explanation = paste0("decrease buying odds by ", round(abs(odds_effect_minus_1[odds_effect_minus_1 < 0]), 2))
+sumtable[odds_effect_minus_1 >= 0, ]$explanation = paste0("increase buying odds by ", round(odds_effect_minus_1[odds_effect_minus_1 >= 0], 2))
 
-sumtable
+sumtable_cis = confint(sleepers.plr)
+
+sumtable[, c("Value", "signif", "odds_effect")]
 
 ```
 
 
 Each coefficient represents one attribute level or attribute transformation (".L" for linear, ".Q" for quadratic). Without getting into too many details about this output format, we can see (from *signif* column) that only `r paste0(rownames(sumtable[sumtable$signif != "", ]), collapse = ", ")` coefficients are significant (not 0 with high probability).
+
+Negative coefficients in the table above mean that increasing the corresponding attribute value reduces the odds of the buying intent and vice versa - positive coefficients mean that increasing the corresponding attribute value increases the odds of the buying intent. So e.g. increasing *price* (with its negative coefficient `r sumtable["price", "Value"]`) reduces the buying intent while giving *scientific evidence* in *social_proof* (with its positive coefficient `r sumtable["social_proofscientific evidence", "Value"]`) increases the buying intent compared with the *`r levels(experiment_data$social_proof)[1]`*.
+
+The coefficients ("Value") in the table are given on a logarithmic scale, so to find how they affect the odds of buying intent, we have to exponentiate them. This is the "odds_effect" column. If this number is < 1, the attribute value decreases the odds of buying. If this number is > 1, the attribute value increases the odds of buying.
+
+Taking everything into account, we have the following attribute values with their effect on buying odds as just described:
+
+```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+
+sumtable[(grepl("Interc", rownames(sumtable)) == FALSE), c("odds_effect", "explanation")]
+
+```
+
 
 Since we built an ordinal regression model, we have to check its main assumption (parallel regression assumption, a.k.a. the proportional odds assumption).
 
@@ -222,41 +272,83 @@ Price doesn't follow the proportional odds assumption, but this is expected, bec
 
 Thus altogether we can proceed with the analysis.
 
-Since a lot of coefficients are non significant, let's try to see if we can remove some variables from the model or improve the model by adding interactions (as explained before with the graphics).
-
-...
-
-We could remove *offer* and *duration* but we don't get much improvement (AIC has decreased only around 7). Therefore we rather keep all the variables.
-
+Since a lot of coefficients are non significant, we tested if we can remove some variables from the model or improve the model by adding interactions (as explained before with the graphics).
 
 
 ```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
 
 #addterm(sleepers.plr, ~.^2, test = "Chisq")
-sleepers.plr2 <- stepAIC(sleepers.plr, ~ . ^2)
+#sleepers.plr2 <- stepAIC(sleepers.plr, ~ . ^2)
 #sleepers.plr2$anova
 #anova(sleepers.plr, sleepers.plr2)
 
 ```
 
 
+We found that we could remove *offer* and *duration* but we don't get much improvement (AIC has decreased only around 7). Therefore we rather keep all the variables.
+
+
 ```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
 
-pr <- profile(sleepers.plr)
-confint(pr)
+#pr <- profile(sleepers.plr)
+#confint(pr)
 #plot(pr)
 #pairs(pr)
 
 ```
 
-Add do_predict.
-Check the model on existing data.
+
+To check how our model works on the existing data, we ran a check with the following result:
 
 
-Take out the best message.
+```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+
+new_data = read_sav('../inst/extdata/experiment_data.sav')
+new_data = predict_transform(new_data)
+new_data_predicted_probs = predict(sleepers.plr, new_data, type = "p")
+new_data_predicted = unlist(lapply(1:nrow(new_data_predicted_probs),function(i) sample(colnames(new_data_predicted_probs), 1, replace = TRUE, prob = new_data_predicted_probs[i, ])))
+new_data_predicted = as.numeric(factor(new_data_predicted, levels = levels(experiment_data$answer)))
+
+new_vs_predicted_table = table(new_data_predicted, new_data$answer)
+
+# overall hits
+paste0("Overall correct predictions: ", round(100 * psych::tr(new_vs_predicted_table)/sum(new_vs_predicted_table), 2), "%")
+
+```
+
+Summing everything up, the best marketing message would consist of:
+* Duration: 3 months
+* Offer: improve your sleep sustainably
+* Outcome: breaking bad habits and creating new routines
+* Price: $20/month
+* Rtb: a program created just for you
+* Social proof: scientific evidence
+
 
 
 # segmentation
+
+
+
+```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+
+df = experiment_data
+rvar = "response_id"
+rank_1 = df[!is.na(df[[rvar]]), ] %>% 
+  group_by(get(rvar)) %>% 
+  summarise(min_buying_intent = round(min(as.numeric(answer)), 2), 
+            avg_buying_intent = round(mean(as.numeric(answer)), 2),
+            max_buying_intent = round(max(as.numeric(answer)), 2),)
+colnames(rank_1)[1] = rvar
+rank_1
+
+sum(rank_1$max_buying_intent == 1) # 239, not buying anything > remove from the dataset, wrong target group
+sum(rank_1$min_buying_intent == 4) # 23, buying everything > keep, not so many, perhaps ok target group
+
+sum(rank_1$min_buying_intent == 3) # 112, buyers, these are the most important
+sum(rank_1$max_buying_intent == 2) # 151, not buyers, not so important
+
+```
 
 
 Calculate mean buying intent for each respondent.
