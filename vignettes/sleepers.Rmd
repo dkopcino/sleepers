@@ -494,6 +494,100 @@ for (cn in setdiff(colnames(survey_data), "response_id")) {
   }
 }
 
+# uhvatiti one levele za svaki atribut koji imaju a. najviše buyera ili b. najveći omjer buyer/non-buyer
+# za svaki taj level spremiti sve respondere koji su buyeri
+# idealno bi bilo onda naći presjek svih tih skupova, da ne bude prazan ili premali i onda bi to bio skup koji bi
+# imalo smisla ciljati za kupovinu
+# ili napraviti logističku regresiju svih levela da se predvidi buyer i onda vidjeti koji leveli najviše pozitivno
+# doprinose da bude buyer
+
+for (cn in cns) {
+  print(cn)
+  print(table(rank_1$buyer, survey_data[[cn]]))
+  readline(prompt="Press [enter] to continue")
+}
+
+buyer.glm <- glm(as.formula(paste0("buyer ~ ", paste(setdiff(cns, "weights"), collapse = " + "))), 
+                 data = cbind(buyer = as.numeric(factor(rank_1$buyer, levels = c("non-buyer", "buyer"))) - 1, survey_data[, cns]), 
+                 family="binomial")
+
+
+
+sumtable.buyer.glm = data.frame((summary(buyer.glm))$coefficients)
+sumtable.buyer.glm[, colnames(sumtable.buyer.glm)] = lapply(sumtable.buyer.glm, round, digits = 3)
+sumtable.buyer.glm$odds_effect = round(exp(sumtable.buyer.glm$Estimate), 3)
+sumtable.buyer.glm$explanation = "" # create a column
+odds_effect_minus_1 = sumtable.buyer.glm$odds_effect - 1
+sumtable.buyer.glm[odds_effect_minus_1 < 0, ]$explanation = paste0("decrease buying odds by ", round(abs(odds_effect_minus_1[odds_effect_minus_1 < 0]), 2))
+sumtable.buyer.glm[odds_effect_minus_1 >= 0, ]$explanation = paste0("increase buying odds by ", round(odds_effect_minus_1[odds_effect_minus_1 >= 0], 2))
+for (an in setdiff(cns, "weights")) {
+  an_rows = grep(an, rownames(sumtable.buyer.glm))
+  sumtable.buyer.glm = rbind(sumtable.buyer.glm[1:(min(an_rows)-1), ], 
+                             c(0, 0, 0, 1, 1, "reference level, effect = 0"),
+                             sumtable.buyer.glm[min(an_rows):nrow(sumtable.buyer.glm), ]
+                             )
+  rownames(sumtable.buyer.glm)[min(an_rows)] = paste0(an, levels(survey_data[[an]])[1], ", ref. level")
+}
+sumtable.buyer.glm.2 = sumtable.buyer.glm
+rownames(sumtable.buyer.glm) = substr(rownames(sumtable.buyer.glm), 1, 35)
+
+#sumtable_cis = confint(sleepers.plr)
+
+sumtable.buyer.glm[, c("Estimate", "Pr...z..", "explanation")]
+
+
+library(pscl)
+pR2(buyer.glm)
+
+
+best_personals = data.frame()
+for (an in setdiff(cns, "weights")) {
+  an_row_indices = grep(paste0("^", an, "[^[:digit:]]"), rownames(sumtable.buyer.glm.2))
+  if (length(an_row_indices) == 0) an_row_indices = grep(paste0("^", an), rownames(sumtable.buyer.glm.2))
+  an_rows = sumtable.buyer.glm.2[an_row_indices, , drop = FALSE]
+  # we treat all non-significant rows, including the reference level row, as 0
+  # if there is no significant row with a positive estimate, we suggest all non-significant rows
+  signif_an_rows = an_rows[an_rows$Pr...z.. < 0.05, , drop = FALSE]
+  if ((nrow(signif_an_rows) > 0) && (max(signif_an_rows$Estimate) > 0)) {
+    max_estimate_level = rownames(signif_an_rows)[which.max(signif_an_rows$Estimate)]
+    max_estimate_level_clr = gsub(an, "", max_estimate_level)
+    max_estimate_level_clr_estimate = an_rows[max_estimate_level, ]$Estimate
+    max_estimate_level_clr_p_value = an_rows[max_estimate_level, "Pr...z.."]
+    max_estimate_level_clr_explanation = an_rows[max_estimate_level, ]$explanation
+    best_personals = rbind(best_personals, 
+                           c(an, 
+                             max_estimate_level_clr, 
+                             max_estimate_level_clr_estimate, 
+                             max_estimate_level_clr_p_value, 
+                             max_estimate_level_clr_explanation
+                             )
+                           )
+  } else {
+    non_signif_an_rows = an_rows[an_rows$Pr...z.. >= 0.05, , drop = FALSE] # at least reference level is here
+    max_estimate_level = rownames(non_signif_an_rows)
+    max_estimate_level_clr = gsub(paste0(an, "|, ref. level"), "", max_estimate_level)
+    for (mel in max_estimate_level_clr) {
+      best_personals = rbind(best_personals, 
+                             c(an, 
+                               mel, 
+                               0, 
+                               1, 
+                               "no effect on buying odds"
+                               )
+                             )
+    }
+  }
+}
+colnames(best_personals) = c("personal", "value", "estimate", "p-value", "explanation")
+
+
+fnd_indices = lapply(unique(best_personals$personal), function(cn) {
+  which(survey_data[[cn]] %in% best_personals[best_personals$personal == cn, "value"])
+})
+
+Reduce(intersect, fnd_indices)
+
+
 cst = chisq.test(rank_1$buyer, survey_data$d_urban, simulate.p.value = TRUE)
 
 
