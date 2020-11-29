@@ -11,10 +11,14 @@ vignette: >
 
 ```{r, include = FALSE}
 knitr::opts_chunk$set(
+ echo = FALSE,
+ warning = FALSE,
+ message = FALSE,
   collapse = TRUE,
   comment = "#>"
 )
 ```
+
 
 # Introduction
 
@@ -23,11 +27,12 @@ In this vignette we will present the analysis of the survey data provided by Gra
 The parts of the message were organized into groups ("attributes") as follows:
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE}
+```{r}
 
 #library(sleepers)
 library(haven)
 library(dplyr)
+library(stringr)
 
 experiment_data = read_sav('../inst/extdata/experiment_data.sav')
 
@@ -38,8 +43,8 @@ fact_columns = setdiff(colnames(experiment_data), c("task", "duration", "price")
 experiment_data[, fact_columns] = lapply(experiment_data[, fact_columns], factor)
 
 # now factorize duration and price, but create new columns, this is just for pretty printing
-experiment_data$duration_f = factor(experiment_data$duration)
-experiment_data$price_f = factor(experiment_data$price)
+experiment_data$duration_f = factor(experiment_data$duration, levels =  c("3 months", "6 months", "12 months"))
+experiment_data$price_f = factor(experiment_data$price, levels = c("$20/month", "$30/month", "$40/month"))
 
 # save factorized attributes columns names for later usage
 att_columns = setdiff(colnames(experiment_data), c("response_id", "task", "duration", "price", "answer"))
@@ -95,18 +100,62 @@ Each question had `r length(levels(experiment_data$answer))` answer options: `r 
 
 Let's have a look at how many times each attribute was shown and the frequency distribution of the answers:
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE}
+```{r}
 
 summary(experiment_data[, c(att_columns, "answer")])
 # here we also see that we don't have any NAs, missing data
 
 ```
 
+The attributes frequencies seem equally distributed. The answers frequencies tend to be "Very unlikely" but this can be simply a result of lack of buying intent by the respondents.
+
+Since the survey data is actually a panel data (many answers from the same respondent) we will also check if there are some inconsistencies or strange behavior with respect to the respondents. Here is a summary of the buying intent answers for a few respondents:
+
+
+```{r}
+
+rank_1 = experiment_data %>% group_by(response_id) %>% 
+  summarise(min_buying_intent = round(min(as.numeric(answer)), 2), 
+            avg_buying_intent = round(mean(as.numeric(answer)), 2),
+            max_buying_intent = round(max(as.numeric(answer)), 2),)
+colnames(rank_1)[1] = "response_id"
+head(rank_1, n = 10)
+
+```
+
+
+Some respondents seem to be more willing to buy, some less, but we can notice that e.g. respondent with id "R_0ezucdFLFLIYzK1" has the minimum and maximum buying intent 1. This means that all his/her answers were "Very unlikely". Such respondents pose a problem for our (later) modeling because their answers provide no information about the value of attributes, they just "pull" everything towards their single answer, in this case "Very unlikely".
+
+Let's see how many respondents like this one we have - always giving the same answer, grouped with respect to the buying intent options:
+
+
+```{r}
+
+always_the_same_answer = rank_1$min_buying_intent == rank_1$max_buying_intent
+paste0("Always the same answer: ", sum(always_the_same_answer))
+paste0("All Very unlikely: ", sum(rank_1$max_buying_intent == 1))
+paste0("All Somewhat unlikely: ", sum((rank_1$min_buying_intent == rank_1$max_buying_intent) & (rank_1$max_buying_intent == 2)))
+paste0("All Somewhat likely: ", sum((rank_1$min_buying_intent == rank_1$max_buying_intent) & (rank_1$max_buying_intent == 3)))
+paste0("All Very likely: ", sum(rank_1$min_buying_intent == 4))
+
+```
+
+This is quite a big number (`r round((sum(always_the_same_answer)/nrow(rank_1))*100, 2)`%) of people who constantly chose the same answer. Since the goal of this analysis is to find how the attributes affect the buying intent, we could say that for this group of respondents - **it doesn't**!
+
+If this was not panel data we could conclude that the attributes are simply not driving enough buying intent. But since we have a panel data, we tend to conclude that the respondents who always chose the same answer either did not understand the task or simply don't care about the whole survey and didn't think about the questions at all. In both cases their answers are invalid.
+
+That is why we will **exclude** the answers given by these people from the further analysis. This doesn't mean that these respondents shouldn't be further contacted or similar (especially those that always wanted to buy), but for the sake of this analysis their answers are invalid.
+
+```{r}
+
+experiment_data = experiment_data[experiment_data$response_id %in% rank_1[!always_the_same_answer, "response_id", drop = TRUE], ]
+
+```
 
 Besides the survey about the best marketing message for the mobile application, respondents also filled a personal survey, giving information about them, their sleeping problems, ways of coping with them etc.
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE}
+```{r}
 
 survey_data = read_sav('../inst/extdata/survey_data.sav')
 # factorize all columns
@@ -122,7 +171,7 @@ for (cn in fact_columns_names) {
 survey_data = survey_data_1
 
 
-ftable(xtabs(~ social_proof + price_f + answer, data = experiment_data))
+#ftable(xtabs(~ social_proof + price_f + answer, data = experiment_data))
 
 
 ```
@@ -137,7 +186,7 @@ There were `r ncol(survey_data)` additional questions in this personal survey. W
 As a first step in our analysis of the (experimental) survey data, we will make a quick "counting" analysis: let's see what is the average "buying intent" (from 1 = `r levels(experiment_data$answer)[1]` to `r length(levels(experiment_data$answer))` = `r levels(experiment_data$answer)[length(levels(experiment_data$answer))]`) for different attributes and their values.
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r fig.height = 4.3, fig.width = 7, fig.align = "center"}
 
 library(ggplot2)
 library(gridExtra)
@@ -169,7 +218,7 @@ With other attributes, we can't see such a clear trend.
 Let's also have a look at the average buying intents for different 2-combinations of attribute levels:
 
 
-```{r echo= FALSE, warning = FALSE, message = FALSE}
+```{r fig.height = 4.3, fig.width = 7, fig.align = "center"}
 
 two_atts_combs = combn(x = att_columns, m = 2)
 ggi2 = lapply(1:ncol(two_atts_combs), function(two_atts_i) {
@@ -195,14 +244,14 @@ marrangeGrob(ggi2, nrow = 2, ncol = 2)
 ```
 
 
-We can see that the following combinations of attributes have somewhat bigger difference between the smallest (pink) and largest (red) average buying intent: *duration + price, offer + price, offer + rtb, offer + social_proof and outcome + price*. This indicates that some of these value combinations could have an interaction effect, where one value combined with another value gives a cumulative (positive or negative) effect on the average buying intent. Thus maybe we should include these combinations in the modeling.
+We can see that the following combinations of attributes have somewhat bigger difference between the smallest (pink) and largest (red) average buying intent: *offer + rtb, offer + price, outcome + price, rtb + price, duration + price, social_proof + price*. This indicates that some of these value combinations could have an interaction effect, where one value combined with another value gives a cumulative (positive or negative) effect on the average buying intent. Thus maybe we should include these combinations in the modeling.
 
-It is now time to build a model. Since our output variable *answer* is an ordinal variable (has comparable values), we will use an ordinal regression model with *answer* as the output variable and all other variables as predictors. 
+It is now time to build a model. Since our output variable *answer* is an ordinal variable (has comparable values), we will use an ordinal logistic regression model with *answer* as the output variable and all other variables as predictors. 
 
 We get the following summary:
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 library(MASS)
 
@@ -210,35 +259,50 @@ options(contrasts = c("contr.treatment", "contr.poly"))
 sleepers.plr <- polr(answer ~ duration + offer + outcome + price + rtb + social_proof, data = experiment_data, Hess = TRUE)
 
 # save the model 
-saveRDS(sleepers.plr, "model_sleepers.plr.RDS")
+saveRDS(sleepers.plr, "sleepers.plr.RDS")
 
 #logLik(sleepers.plr)
 
 # all coefficients together, intercepts too, with estimate, std. error and t value
 sumtable = data.frame((summary(sleepers.plr))$coefficients)
+# round to 3 digits
+sumtable[, colnames(sumtable)] = lapply(sumtable, round, digits = 3)
 # last few coefficients are intercepts, let's emphasize that
 intercepts_rows = nrow(sumtable) - ((length(sleepers.plr$zeta) - 1):0)
-rownames(sumtable)[intercepts_rows] = paste0("Interc_", rownames(sumtable)[intercepts_rows])
+rownames(sumtable)[intercepts_rows] = paste0("Intercept_", rownames(sumtable)[intercepts_rows])
 # now adding p-values and significance, it is a usual way to display the results, don't know why polr doesn't have it
 sumtable$p.value = pt(abs(sumtable$t.value), sleepers.plr$nobs - sleepers.plr$edf, lower.tail = FALSE) * 2
 sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
 sumtable[sumtable$p.value < .05, ]$signif = "*"
 sumtable[sumtable$p.value < .01, ]$signif = "**"
 sumtable[sumtable$p.value < .001, ]$signif = "***"
-sumtable$odds_effect = exp(sumtable$Value)
+sumtable$odds_effect = round(exp(sumtable$Value), 3)
 sumtable$explanation = "" # create a column
 odds_effect_minus_1 = sumtable$odds_effect - 1
 sumtable[odds_effect_minus_1 < 0, ]$explanation = paste0("decrease buying odds by ", round(abs(odds_effect_minus_1[odds_effect_minus_1 < 0]), 2))
 sumtable[odds_effect_minus_1 >= 0, ]$explanation = paste0("increase buying odds by ", round(odds_effect_minus_1[odds_effect_minus_1 >= 0], 2))
 
-sumtable_cis = confint(sleepers.plr)
+# add reference levels for a clearer picture
+for (an in c("offer", "outcome", "rtb", "social_proof")) {
+  an_rows = grep(an, rownames(sumtable))
+  sumtable = rbind(sumtable[1:(min(an_rows)-1), ], 
+                   c(0, 0, 0, 1, "", 1, "reference level, effect = 0"),
+                   sumtable[min(an_rows):nrow(sumtable), ]
+                   )
+  rownames(sumtable)[min(an_rows)] = paste0(an, levels(experiment_data[[an]])[1], ", ref. level")
+}
+
+# shorten the row names for better presentation
+rownames(sumtable) = substr(rownames(sumtable), 1, 35)
+
+#sumtable_cis = confint(sleepers.plr)
 
 sumtable[, c("Value", "signif", "odds_effect")]
 
 ```
 
 
-Each coefficient represents one attribute level or attribute transformation (".L" for linear, ".Q" for quadratic). Without getting into too many details about this output format, we can see (from *signif* column) that only `r paste0(rownames(sumtable[sumtable$signif != "", ]), collapse = ", ")` coefficients are significant (not 0 with high probability).
+Each coefficient represents attribute value (numeric or a level). Without getting into too many details about this output format, we can see (from *signif* column) that only `r paste0(rownames(sumtable[sumtable$signif != "", ]), collapse = ", ")` coefficients are significant (not 0 with high probability).
 
 Negative coefficients in the table above mean that increasing the corresponding attribute value reduces the odds of the buying intent and vice versa - positive coefficients mean that increasing the corresponding attribute value increases the odds of the buying intent. So e.g. increasing *price* (with its negative coefficient `r sumtable["price", "Value"]`) reduces the buying intent while giving *scientific evidence* in *social_proof* (with its positive coefficient `r sumtable["social_proofscientific evidence", "Value"]`) increases the buying intent compared with the *`r levels(experiment_data$social_proof)[1]`*.
 
@@ -246,7 +310,7 @@ The coefficients ("Value") in the table are given on a logarithmic scale, so to 
 
 Taking everything into account, we have the following attribute values with their effect on buying odds as just described:
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 sumtable[(grepl("Interc", rownames(sumtable)) == FALSE), c("odds_effect", "explanation")]
 
@@ -256,7 +320,7 @@ sumtable[(grepl("Interc", rownames(sumtable)) == FALSE), c("odds_effect", "expla
 Since we built an ordinal regression model, we have to check its main assumption (parallel regression assumption, a.k.a. the proportional odds assumption).
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 library(brant)
 brant(sleepers.plr)
@@ -275,7 +339,7 @@ Thus altogether we can proceed with the analysis.
 Since a lot of coefficients are non significant, we tested if we can remove some variables from the model or improve the model by adding interactions (as explained before with the graphics).
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 #addterm(sleepers.plr, ~.^2, test = "Chisq")
 #sleepers.plr2 <- stepAIC(sleepers.plr, ~ . ^2)
@@ -285,10 +349,10 @@ Since a lot of coefficients are non significant, we tested if we can remove some
 ```
 
 
-We found that we could remove *offer* and *duration* but we don't get much improvement (AIC has decreased only around 7). Therefore we rather keep all the variables.
+We found that we could remove *duration* and add the interaction *offer:outcome* but we don't get much improvement (AIC has decreased only around 5). Therefore we rather keep all the variables.
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 #pr <- profile(sleepers.plr)
 #confint(pr)
@@ -301,10 +365,12 @@ We found that we could remove *offer* and *duration* but we don't get much impro
 To check how our model works on the existing data, we ran a check with the following result:
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
 new_data = read_sav('../inst/extdata/experiment_data.sav')
 new_data = predict_transform(new_data)
+# clear the same invalid respondents as previously
+new_data = new_data[new_data$response_id %in% rank_1[!always_the_same_answer, "response_id", drop = TRUE], ]
 new_data_predicted_probs = predict(sleepers.plr, new_data, type = "p")
 new_data_predicted = unlist(lapply(1:nrow(new_data_predicted_probs),function(i) sample(colnames(new_data_predicted_probs), 1, replace = TRUE, prob = new_data_predicted_probs[i, ])))
 new_data_predicted = as.numeric(factor(new_data_predicted, levels = levels(experiment_data$answer)))
@@ -316,44 +382,139 @@ paste0("Overall correct predictions: ", round(100 * psych::tr(new_vs_predicted_t
 
 ```
 
+## The best message
+
+
 Summing everything up, the best marketing message would consist of:
-* Duration: 3 months
-* Offer: improve your sleep sustainably
-* Outcome: breaking bad habits and creating new routines
-* Price: $20/month
-* Rtb: a program created just for you
-* Social proof: scientific evidence
+
+* Duration: **12 months**
+* Offer: **improve your health for the long-run**
+* Outcome: **breaking bad habits and creating new routines**
+* Price: **$20/month**
+* Rtb: **a program created just for you** OR **cognitive behavioral therapy**
+* Social proof: **scientific evidence**
 
 
 
-# segmentation
+# Segmentation
 
 
 
-```{r, echo = FALSE, error = FALSE, warning = FALSE, message = FALSE}
+```{r}
 
-df = experiment_data
-rvar = "response_id"
-rank_1 = df[!is.na(df[[rvar]]), ] %>% 
-  group_by(get(rvar)) %>% 
-  summarise(min_buying_intent = round(min(as.numeric(answer)), 2), 
-            avg_buying_intent = round(mean(as.numeric(answer)), 2),
-            max_buying_intent = round(max(as.numeric(answer)), 2),)
-colnames(rank_1)[1] = rvar
-rank_1
+survey_data = read_sav('../inst/extdata/survey_data.sav')
+# factorize all columns
+survey_data_1 = data.frame(lapply(survey_data, factor))
+# levels are now numeric, we want to have text descriptions on what each level means
+fact_columns_names = colnames(survey_data)[colnames(survey_data) != "response_id"]
+for (cn in fact_columns_names) {
+  # have to make this check because some labels were NULL, unclear why
+  if (!is.null(attributes(survey_data[[cn]])$labels)) {
+    levels(survey_data_1[[cn]]) = names(attributes(survey_data[[cn]])$labels)
+  }
+}
+survey_data = survey_data_1
 
-sum(rank_1$max_buying_intent == 1) # 239, not buying anything > remove from the dataset, wrong target group
-sum(rank_1$min_buying_intent == 4) # 23, buying everything > keep, not so many, perhaps ok target group
+# order survey_data by response_id
+survey_data = survey_data[order(survey_data$response_id), ]
 
-sum(rank_1$min_buying_intent == 3) # 112, buyers, these are the most important
-sum(rank_1$max_buying_intent == 2) # 151, not buyers, not so important
+# Try to clean up NAs.
+
+# demography
+# "d_urban" "s_gender" "s_race" "d_education" "s_hhincome" "s_problem" no NAs
+# "d_marital" "d_h_hnumber" "d_parent" no NAs
+# "d_child_infant" "d_child_young" "d_child_older" all have 592 NAs, probably corresponding to the 592 where d_parent = No
+# we can set these NAs to appropriate levels
+survey_data[is.na(survey_data$d_child_infant), ]$d_child_infant = "None"
+survey_data[is.na(survey_data$d_child_young), ]$d_child_young = "None"
+survey_data[is.na(survey_data$d_child_older), ]$d_child_older = "None"
+# "d_politics" 25 NAs, change to Other
+survey_data[is.na(survey_data$d_politics), ]$d_politics = "Other"
+# "d_political_view" "d_employment" 
+# "d_work_schedule" "d_work_hours" both have 459 NAs, probably corresponding to d_employment = Temporarily laid off,
+# Unemployed, Retired, Permanently disabled, Taking care of home or family, Student, Other (total 459)
+# we will put Don’t know / not applicable for d_work_schedule
+survey_data[is.na(survey_data$d_work_schedule), ]$d_work_schedule = "Don’t know / not applicable"
+# we will put Less than 20 for d_work_hours
+survey_data[is.na(survey_data$d_work_hours), ]$d_work_hours = "Less than 20"
+# "s_region" "s_age" "weights"
+
+# philosophy is ok, no NAs
+#summary(survey_data[, grep("m1_philosophy", colnames(survey_data))])
+
+# attitudes is ok, no NAs
+#summary(survey_data[, grep("m2_attitudes", colnames(survey_data))])
+
+# helper function, replaces NAs in factor columns defined by nameregexp
+# with new level NAlevel and adds the new level to the factor levels for the columns
+replaceNAandrefactor = function(nameregexp, NAlevel) {
+  for (cn in grep(nameregexp, colnames(survey_data))) {
+    levels(survey_data[, cn]) <<- c(levels(survey_data[, cn]), NAlevel)
+    survey_data[is.na(survey_data[[cn]]), cn] <<- NAlevel
+  }
+}
+
+# awareness is not ok, many NAs, probably related to the fact that people don't use/know some app
+# we replace NA with None and refactor the variable
+#summary(survey_data[, grep("m2_awareness", colnames(survey_data))])
+# source is not OK, similar to awareness
+#summary(survey_data[, grep("source", colnames(survey_data))])
+# behavior_N is not OK, similar to awareness
+#summary(survey_data[, grep("behavior_[[:digit:]]+", colnames(survey_data))])
+replaceNAandrefactor("m2_awareness|source|behavior_[[:digit:]]+", "None")
+# behavior_a_N is not OK, NAs probably mean I’m not sure
+#summary(survey_data[, grep("behavior_[[:alpha:]]+", colnames(survey_data))])
+replaceNAandrefactor("behavior_[[:alpha:]]+", "I’m not sure")
+
+
+
+#ftable(xtabs(~ social_proof + price_f + answer, data = experiment_data))
+
+
+# order rank_1 by response_id to be able to compare with survey_data
+rank_1 = rank_1[order(rank_1$response_id), ]
+
+# check that the response_ids are equally ordered both in rank_1 and survey_data
+#sum(levels(rank_1$response_id)[rank_1$response_id] == levels(survey_data$response_id)[survey_data$response_id]) == nrow(rank_1)
+
+# make simple flag variable for buyers
+rank_1$buyer = ifelse(rank_1$avg_buying_intent >= 3, "buyer", "non-buyer")
+
+# table(rank_1$buyer, survey_data$d_urban)
+# table(rank_1$buyer, survey_data$s_gender)
+
+cns = c()
+for (cn in setdiff(colnames(survey_data), "response_id")) {
+  #print(cn)
+  if (max(as.numeric(survey_data[[cn]])) > min(as.numeric(survey_data[[cn]]))) {
+    cst = chisq.test(rank_1$buyer, survey_data[[cn]], simulate.p.value = TRUE)
+    if (cst$p.value < 0.01) cns = c(cns, cn)
+  } else {
+    print(paste0(cn, " has only one value"))
+  }
+}
+
+cst = chisq.test(rank_1$buyer, survey_data$d_urban, simulate.p.value = TRUE)
+
 
 ```
 
 
-Calculate mean buying intent for each respondent.
 Try some clustering algorithms on survey_data. What to do with NAs? If there are too many NAs, remove the column. If NAs can have a meaning, impute data.
 Try to find a cluster for which the average buying intent is the highest. Hopefully this will be significantly the highest. Is there some test to see this significance?
+
+
+
+
+
+# Discussion
+
+
+It would be better if the survey was choice based instead of ratings based. E.g. we would avoid having respondents that always pick the same answer.
+
+It would be better if we had more experiment survey data instead of really many demographic survey data (100 variables).
+
+
 
 
 
@@ -404,15 +565,6 @@ Notice the use of the : in the spacer under the heading. This determines the ali
 If the data underlying your table exists in R, don’t lay it out by hand. Instead, use knitr::kable(), or look at printr or pander.
 
 To affect all blocks, call knitr::opts_chunk$set() in a knitr block:
-```{r, echo = FALSE}
-knitr::opts_chunk$set(
- echo = FALSE,
- warning = FALSE,
- message = FALSE,
- collapse = TRUE, 
- comment = "#>"
-)
-```
 
 
 read_sav(system.file("extdata", "experiment_data.sav", package = "sleepers"))
