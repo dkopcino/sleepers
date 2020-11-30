@@ -75,6 +75,11 @@ predict_transform = function(new_data) {
   for (cn in setdiff(fact_columns, "answer")) {
     new_data[[cn]] = factor(new_data[[cn]], levels = levels(experiment_data[[cn]]))
   }
+  if (!is.null(new_data[["answer"]])) {
+    # here we assume that the answers are given as in the original data, with numbers indicating the answer
+    new_data[["answer"]] = factor(new_data[["answer"]])
+    levels(new_data[["answer"]]) = levels(experiment_data[["answer"]])
+  }
   new_data$duration = as.numeric(unlist(lapply(str_split(new_data$duration, "[[:space:]]+month(s)*"), "[[", 1)))
   new_data$duration = (new_data$duration - min_experiment_data_duration)/(max_experiment_data_duration - min_experiment_data_duration)
   new_data$price = as.numeric(gsub("\\$", "", unlist(lapply(str_split(new_data$price, "/month(s)*"), "[[", 1))))
@@ -191,11 +196,13 @@ As a first step in our analysis of the (experimental) survey data, we will make 
 library(ggplot2)
 library(gridExtra)
 
-cutlabels10 = function(x) {
-  is_long = nchar(x) > 10
-  x[is_long] = paste0(substr(x[is_long], 1, 7), "...")
+cutlabelsN = function(x, N = 10) {
+  is_long = nchar(x) > N
+  x[is_long] = paste0(substr(x[is_long], 1, N-3), "...")
   x
 }
+
+cutlabels5 = function(x) cutlabelsN(x, 5)
 
 plot_rvar = function(rvar, df) {
   rank_1 = df[!is.na(df[[rvar]]), ] %>% group_by(get(rvar)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2))
@@ -203,7 +210,7 @@ plot_rvar = function(rvar, df) {
   label_fill = rep("gray", length(rank_1$avg_buying_intent))
   label_fill[rank_1$avg_buying_intent == max(rank_1$avg_buying_intent)] = "red"
   label_fill[rank_1$avg_buying_intent == min(rank_1$avg_buying_intent)] = "pink"
-  ggplot(data = rank_1, aes(x = get(rvar), y = avg_buying_intent)) + scale_x_discrete(labels = cutlabels10) + geom_col(fill = label_fill) + geom_text(aes(x = get(rvar), y = avg_buying_intent/2, label = rank_1$avg_buying_intent), data = rank_1, size = 3, colour = "white") + xlab(rvar) + theme(axis.text.x = element_text(size = 8), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())
+  ggplot(data = rank_1, aes(x = get(rvar), y = avg_buying_intent)) + scale_x_discrete(labels = cutlabelsN) + geom_col(fill = label_fill) + geom_text(aes(x = get(rvar), y = avg_buying_intent/2, label = rank_1$avg_buying_intent), data = rank_1, size = 3, colour = "white") + xlab(rvar) + theme(axis.text.x = element_text(size = 8), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())
 }
 ggi = lapply(att_columns, plot_rvar, df = experiment_data)
 marrangeGrob(ggi, nrow = 3, ncol = 2)
@@ -234,7 +241,7 @@ ggi2 = lapply(1:ncol(two_atts_combs), function(two_atts_i) {
   label_fill = rep("gray", length(rank_1$avg_buying_intent))
   label_fill[rank_1$avg_buying_intent == max(rank_1$avg_buying_intent)] = "red"
   label_fill[rank_1$avg_buying_intent == min(rank_1$avg_buying_intent)] = "pink"
-  ggplot(data = rank_1, aes(x = get(fst_att), y = get(snd_att))) + scale_x_discrete(labels = cutlabels10) + scale_y_discrete(labels = cutlabels10) + geom_label(aes(x = get(fst_att), y = get(snd_att), label = avg_buying_intent), data = rank_1, colour = "white", fill = label_fill) + xlab(fst_att)+ ylab(snd_att) + theme(axis.text.x = element_text(size = 8), axis.text.y = element_text(size = 8))
+  ggplot(data = rank_1, aes(x = get(fst_att), y = get(snd_att))) + scale_x_discrete(labels = cutlabelsN) + scale_y_discrete(labels = cutlabelsN) + geom_label(aes(x = get(fst_att), y = get(snd_att), label = avg_buying_intent), data = rank_1, colour = "white", fill = label_fill) + xlab(fst_att)+ ylab(snd_att) + theme(axis.text.x = element_text(size = 8), axis.text.y = element_text(size = 8))
 })
 ggi2 = ggi2[!sapply(ggi2, is.null)]
 marrangeGrob(ggi2, nrow = 2, ncol = 2)
@@ -276,23 +283,27 @@ sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
 sumtable[sumtable$p.value < .05, ]$signif = "*"
 sumtable[sumtable$p.value < .01, ]$signif = "**"
 sumtable[sumtable$p.value < .001, ]$signif = "***"
-sumtable$odds_effect = round(exp(sumtable$Value), 3)
+sumtable$odds_effect = round(exp(sumtable$Value), 3) - 1
 sumtable$explanation = "" # create a column
-odds_effect_minus_1 = sumtable$odds_effect - 1
-sumtable[odds_effect_minus_1 < 0, ]$explanation = paste0("decrease buying odds by ", round(abs(odds_effect_minus_1[odds_effect_minus_1 < 0]), 2))
-sumtable[odds_effect_minus_1 >= 0, ]$explanation = paste0("increase buying odds by ", round(odds_effect_minus_1[odds_effect_minus_1 >= 0], 2))
+negative_odds_effect = (sumtable$odds_effect < 0)
+sumtable[negative_odds_effect, ]$explanation = paste0("decrease buying odds by ", round(abs(sumtable[negative_odds_effect, ]$odds_effect), 3))
+sumtable[!negative_odds_effect, ]$explanation = paste0("increase buying odds by ", round(sumtable[!negative_odds_effect, ]$odds_effect, 3))
 
 # add reference levels for a clearer picture
 for (an in c("offer", "outcome", "rtb", "social_proof")) {
   an_rows = grep(an, rownames(sumtable))
   sumtable = rbind(sumtable[1:(min(an_rows)-1), ], 
-                   c(0, 0, 0, 1, "", 1, "reference level, effect = 0"),
+                   c(0, 0, 0, 1, "", 0, "reference level, effect = 0"),
                    sumtable[min(an_rows):nrow(sumtable), ]
                    )
   rownames(sumtable)[min(an_rows)] = paste0(an, levels(experiment_data[[an]])[1], ", ref. level")
 }
 
-# shorten the row names for better presentation
+# have to convert back to numeric, don't know why the columns were converted to character in the loop above
+numeric_columns = !(colnames(sumtable) %in% c("signif", "explanation"))
+sumtable[, numeric_columns] = lapply(sumtable[, numeric_columns], as.numeric)
+
+# shorten the row names for a better presentation
 rownames(sumtable) = substr(rownames(sumtable), 1, 35)
 
 #sumtable_cis = confint(sleepers.plr)
@@ -320,7 +331,7 @@ sumtable[(grepl("Interc", rownames(sumtable)) == FALSE), c("odds_effect", "expla
 Since we built an ordinal regression model, we have to check its main assumption (parallel regression assumption, a.k.a. the proportional odds assumption).
 
 
-```{r}
+```{r message=FALSE, warning=FALSE, error=FALSE}
 
 library(brant)
 brant(sleepers.plr)
@@ -371,14 +382,17 @@ new_data = read_sav('../inst/extdata/experiment_data.sav')
 new_data = predict_transform(new_data)
 # clear the same invalid respondents as previously
 new_data = new_data[new_data$response_id %in% rank_1[!always_the_same_answer, "response_id", drop = TRUE], ]
+
+# do we want to predict class = the highest probability will always win?
+# note: this never gives the Very likely answer
+#new_data_predicted_class = predict(sleepers.plr, new_data, type = "class")
+# or do we want to take probabilities and make sample with these probabilities to determine class?
 new_data_predicted_probs = predict(sleepers.plr, new_data, type = "p")
-new_data_predicted = unlist(lapply(1:nrow(new_data_predicted_probs),function(i) sample(colnames(new_data_predicted_probs), 1, replace = TRUE, prob = new_data_predicted_probs[i, ])))
-new_data_predicted = as.numeric(factor(new_data_predicted, levels = levels(experiment_data$answer)))
+new_data_predicted_class = unlist(lapply(1:nrow(new_data_predicted_probs),function(i) sample(colnames(new_data_predicted_probs), 1, replace = TRUE, prob = new_data_predicted_probs[i, ])))
+new_data_predicted_class = factor(new_data_predicted_class, levels = levels(experiment_data$answer))
 
-new_vs_predicted_table = table(new_data_predicted, new_data$answer)
-
-# overall hits
-paste0("Overall correct predictions: ", round(100 * psych::tr(new_vs_predicted_table)/sum(new_vs_predicted_table), 2), "%")
+library(caret)
+confusionMatrix(new_data_predicted_class, new_data$answer)
 
 ```
 
@@ -400,7 +414,7 @@ Summing everything up, the best marketing message would consist of:
 
 
 
-```{r}
+```{r message = FALSE, error = FALSE, warning = FALSE}
 
 survey_data = read_sav('../inst/extdata/survey_data.sav')
 # factorize all columns
@@ -467,128 +481,460 @@ replaceNAandrefactor("m2_awareness|source|behavior_[[:digit:]]+", "None")
 replaceNAandrefactor("behavior_[[:alpha:]]+", "I’m not sure")
 
 
-
-#ftable(xtabs(~ social_proof + price_f + answer, data = experiment_data))
-
-
 # order rank_1 by response_id to be able to compare with survey_data
 rank_1 = rank_1[order(rank_1$response_id), ]
 
 # check that the response_ids are equally ordered both in rank_1 and survey_data
-#sum(levels(rank_1$response_id)[rank_1$response_id] == levels(survey_data$response_id)[survey_data$response_id]) == nrow(rank_1)
+sum(levels(rank_1$response_id)[rank_1$response_id] == levels(survey_data$response_id)[survey_data$response_id]) == nrow(rank_1)
 
 # make simple flag variable for buyers
 rank_1$buyer = ifelse(rank_1$avg_buying_intent >= 3, "buyer", "non-buyer")
 
-# table(rank_1$buyer, survey_data$d_urban)
-# table(rank_1$buyer, survey_data$s_gender)
+buyer_levels = c("non-buyer", "buyer") # when casting to numeric, non-buyer is 0, buyer is 1
 
+buyer_survey_data = data.frame(buyer_f = factor(rank_1$buyer, levels = buyer_levels), survey_data[, cns])
+buyer_survey_data$buyer = as.numeric(buyer_survey_data$buyer_f) - 1
+
+# remove weights because it seems numeric and it is not clear what it means
+# find columns that have some correlation (chi-squared test) with the buyer flag
 cns = c()
-for (cn in setdiff(colnames(survey_data), "response_id")) {
+for (cn in setdiff(colnames(survey_data), c("response_id", "weights"))) {
   #print(cn)
   if (max(as.numeric(survey_data[[cn]])) > min(as.numeric(survey_data[[cn]]))) {
-    cst = chisq.test(rank_1$buyer, survey_data[[cn]], simulate.p.value = TRUE)
-    if (cst$p.value < 0.01) cns = c(cns, cn)
+    cst = chisq.test(buyer_survey_data$buyer, survey_data[[cn]], simulate.p.value = TRUE)
+    if (cst$p.value < 0.001) cns = c(cns, cn)
   } else {
-    print(paste0(cn, " has only one value"))
+    #print(paste0(cn, " has only one value"))
   }
 }
 
-# uhvatiti one levele za svaki atribut koji imaju a. najviše buyera ili b. najveći omjer buyer/non-buyer
-# za svaki taj level spremiti sve respondere koji su buyeri
-# idealno bi bilo onda naći presjek svih tih skupova, da ne bude prazan ili premali i onda bi to bio skup koji bi
-# imalo smisla ciljati za kupovinu
-# ili napraviti logističku regresiju svih levela da se predvidi buyer i onda vidjeti koji leveli najviše pozitivno
-# doprinose da bude buyer
+buyer.glm <- glm(as.formula(paste0("buyer ~ ", paste(cns, collapse = " + "))), 
+                 data = buyer_survey_data, 
+                 family = "binomial")
 
-for (cn in cns) {
-  print(cn)
-  print(table(rank_1$buyer, survey_data[[cn]]))
-  readline(prompt="Press [enter] to continue")
-}
+library(pscl)
+library(caret)
+pR2(buyer.glm) # pseudo R-squared to check fit
+predict_probs = predict(buyer.glm, buyer_survey_data, type = "response")
+predicted_class = factor(as.numeric(predict_probs > 0.5), levels = c("0", "1"))
+levels(predicted_class) = buyer_levels
+confusionMatrix(data = predicted_class, reference = buyer_survey_data$buyer_f)
 
-buyer.glm <- glm(as.formula(paste0("buyer ~ ", paste(setdiff(cns, "weights"), collapse = " + "))), 
-                 data = cbind(buyer = as.numeric(factor(rank_1$buyer, levels = c("non-buyer", "buyer"))) - 1, survey_data[, cns]), 
-                 family="binomial")
-
-
+#coef_cis = confint(buyer.glm)
 
 sumtable.buyer.glm = data.frame((summary(buyer.glm))$coefficients)
 sumtable.buyer.glm[, colnames(sumtable.buyer.glm)] = lapply(sumtable.buyer.glm, round, digits = 3)
-sumtable.buyer.glm$odds_effect = round(exp(sumtable.buyer.glm$Estimate), 3)
+sumtable.buyer.glm$odds_effect = exp(sumtable.buyer.glm$Estimate)
 sumtable.buyer.glm$explanation = "" # create a column
-odds_effect_minus_1 = sumtable.buyer.glm$odds_effect - 1
-sumtable.buyer.glm[odds_effect_minus_1 < 0, ]$explanation = paste0("decrease buying odds by ", round(abs(odds_effect_minus_1[odds_effect_minus_1 < 0]), 2))
-sumtable.buyer.glm[odds_effect_minus_1 >= 0, ]$explanation = paste0("increase buying odds by ", round(odds_effect_minus_1[odds_effect_minus_1 >= 0], 2))
-for (an in setdiff(cns, "weights")) {
+negative_odds_effect = (sumtable.buyer.glm$odds_effect < 1)
+sumtable.buyer.glm[negative_odds_effect, ]$explanation = paste0("decrease buying odds by factor ", format(abs(sumtable.buyer.glm$odds_effect[negative_odds_effect]), digits = 6))
+sumtable.buyer.glm[!negative_odds_effect, ]$explanation = paste0("increase buying odds by factor ", format(sumtable.buyer.glm$odds_effect[!negative_odds_effect], digits = 6))
+for (an in cns) {
   an_rows = grep(an, rownames(sumtable.buyer.glm))
   sumtable.buyer.glm = rbind(sumtable.buyer.glm[1:(min(an_rows)-1), ], 
-                             c(0, 0, 0, 1, 1, "reference level, effect = 0"),
+                             c(0, 0, 0, 1, 1, "reference level, no effect"),
                              sumtable.buyer.glm[min(an_rows):nrow(sumtable.buyer.glm), ]
                              )
   rownames(sumtable.buyer.glm)[min(an_rows)] = paste0(an, levels(survey_data[[an]])[1], ", ref. level")
 }
+
+# have to convert back to numeric, don't know why the columns were converted to character in the loop above
+numeric_columns = !(colnames(sumtable) %in% c("signif", "explanation"))
+sumtable[, numeric_columns] = lapply(sumtable[, numeric_columns], as.numeric)
+
+# why do we need a copy?
 sumtable.buyer.glm.2 = sumtable.buyer.glm
 rownames(sumtable.buyer.glm) = substr(rownames(sumtable.buyer.glm), 1, 35)
 
-#sumtable_cis = confint(sleepers.plr)
+# printout only a sample because there are too many coefficients
+sumtable.buyer.glm[sample(1:nrow(sumtable.buyer.glm), 30, replace = FALSE), c("Estimate", "Pr...z..", "explanation")]
 
-sumtable.buyer.glm[, c("Estimate", "Pr...z..", "explanation")]
-
-
-library(pscl)
-pR2(buyer.glm)
-
-
+# find the values from the possible survey data answers that maximally increase the odds of being a buyer
 best_personals = data.frame()
-for (an in setdiff(cns, "weights")) {
+for (an in cns) {
   an_row_indices = grep(paste0("^", an, "[^[:digit:]]"), rownames(sumtable.buyer.glm.2))
   if (length(an_row_indices) == 0) an_row_indices = grep(paste0("^", an), rownames(sumtable.buyer.glm.2))
   an_rows = sumtable.buyer.glm.2[an_row_indices, , drop = FALSE]
   # we treat all non-significant rows, including the reference level row, as 0
   # if there is no significant row with a positive estimate, we suggest all non-significant rows
-  signif_an_rows = an_rows[an_rows$Pr...z.. < 0.05, , drop = FALSE]
+  signif_indices = an_rows$Pr...z.. < 0.1
+  signif_an_rows = an_rows[signif_indices, , drop = FALSE]
   if ((nrow(signif_an_rows) > 0) && (max(signif_an_rows$Estimate) > 0)) {
     max_estimate_level = rownames(signif_an_rows)[which.max(signif_an_rows$Estimate)]
     max_estimate_level_clr = gsub(an, "", max_estimate_level)
     max_estimate_level_clr_estimate = an_rows[max_estimate_level, ]$Estimate
     max_estimate_level_clr_p_value = an_rows[max_estimate_level, "Pr...z.."]
+    max_estimate_level_clr_odds_effect = an_rows[max_estimate_level, "odds_effect"]
     max_estimate_level_clr_explanation = an_rows[max_estimate_level, ]$explanation
+    is_single_level = 1
     best_personals = rbind(best_personals, 
                            c(an, 
                              max_estimate_level_clr, 
                              max_estimate_level_clr_estimate, 
-                             max_estimate_level_clr_p_value, 
-                             max_estimate_level_clr_explanation
+                             max_estimate_level_clr_p_value,
+                             max_estimate_level_clr_odds_effect,
+                             max_estimate_level_clr_explanation,
+                             is_single_level
                              )
                            )
   } else {
-    non_signif_an_rows = an_rows[an_rows$Pr...z.. >= 0.05, , drop = FALSE] # at least reference level is here
+    non_signif_an_rows = an_rows[!signif_indices, , drop = FALSE] # at least reference level is here
     max_estimate_level = rownames(non_signif_an_rows)
     max_estimate_level_clr = gsub(paste0(an, "|, ref. level"), "", max_estimate_level)
+    is_single_level = as.numeric(length(max_estimate_level_clr) == 1)
     for (mel in max_estimate_level_clr) {
       best_personals = rbind(best_personals, 
                              c(an, 
                                mel, 
                                0, 
-                               1, 
-                               "no effect on buying odds"
+                               1,
+                               1,
+                               "no effect on buying odds",
+                               is_single_level
                                )
                              )
     }
   }
 }
-colnames(best_personals) = c("personal", "value", "estimate", "p-value", "explanation")
+colnames(best_personals) = c("personal", "value", "estimate", "p-value", "odds_effect", "explanation", "is_single")
 
+# have to convert back to numeric, don't know why the columns were converted to character in the loop above
+numeric_columns = c("estimate", "p-value", "odds_effect")
+best_personals[, numeric_columns] = lapply(best_personals[, numeric_columns], as.numeric)
 
-fnd_indices = lapply(unique(best_personals$personal), function(cn) {
+# find the best answers in the survey data to identify respondents who gave these answers
+fnd_indices = lapply(unique(best_personals[best_personals$estimate != 0, ]$personal), function(cn) {
+#fnd_indices = lapply(unique(best_personals$personal), function(cn) {
   which(survey_data[[cn]] %in% best_personals[best_personals$personal == cn, "value"])
 })
 
-Reduce(intersect, fnd_indices)
+fnd_indices_intersect = Reduce(intersect, fnd_indices)
+
+# are these buyers?
+#table(buyer_survey_data[fnd_indices_intersect, ]$buyer_f)
+
+# printout details and the total effect on odds for the best answers
+total_odds_effect = prod(best_personals[best_personals$personal > 0, ]$odds_effect)
+best_personals[best_personals$estimate > 0, c("personal", "value", "odds_effect")]
+
+```
 
 
-cst = chisq.test(rank_1$buyer, survey_data$d_urban, simulate.p.value = TRUE)
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+maximal_k = 10
+
+clust_survey_data = buyer_survey_data[, !(colnames(buyer_survey_data) %in% c("buyer", "buyer_f"))]
+clust_survey_data[, colnames(clust_survey_data)] = lapply(clust_survey_data, as.numeric)
+
+elbow_method(clust_survey_data, k = maximal_k, method = "kmeans")
+
+```
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+elbow_method(clust_survey_data, k = maximal_k, method = "hclust")
+
+```
+
+
+
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+### --> Define the number of clusters to be used by all algorithms
+n_clusters = 3
+
+method_return = POLCA_CLUSTERING(clust_survey_data, n_clusters)
+dmodel = method_return[["dmodel"]]
+dclustering = method_return[["dclustering"]]
+
+#print(summary(dmodel))
+
+#print(plot(dclustering))
+#print_clusters(dclustering, n_clusters, clust_survey_data)
+#print(paste("cluster", 1))
+#print(survey_data[dclustering == 1, ]$response_id)
+#print(paste("cluster", 2))
+#print(survey_data[dclustering == 2, ]$response_id)
+
+#print(paste("TOTAL WITHIN SS:", wss.total(clust_survey_data, dclustering)))
+
+princ = prcomp(clust_survey_data)
+nComp = 2
+project = predict(princ, newdata = clust_survey_data)[, 1:nComp]
+project.plus = cbind(as.data.frame(project),
+                     cluster = as.factor(dclustering))
+print(ggplot(project.plus, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = cluster, shape = cluster)))
+
+```
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+# ggplot(data = buyer_survey_data, aes(x = d_urban, fill = clustering)) + geom_bar(position = "dodge") + scale_x_discrete(labels = cutlabelsN) + xlab("d_urban")
+
+buyer_survey_data$clustering = factor(dclustering)
+
+table(buyer_survey_data$buyer_f, buyer_survey_data$clustering)
+
+```
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+best_personals_single_i = (best_personals$is_single == 1)
+paste0(best_personals[best_personals_single_i, ]$personal, ":", best_personals[best_personals_single_i, ]$value)
+
+```
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
+#ggi = lapply(best_personals[best_personals$is_single == 1, ]$personal, 
+             function(cn) {
+               ggplot(data = buyer_survey_data, aes(x = get(cn), fill = clustering)) + geom_bar(position = "dodge") + scale_x_discrete(labels = cutlabels5) + xlab(cn)
+             }
+             )
+marrangeGrob(ggi, nrow = 3, ncol = 2)
+
+# interest_coach: "Very interested"
+# past_coach: "Yes"
+# interst_cbt: "Very interested"
+# m1_philosophy_6: "Strongly agree"           
+# m1_philosophy_2: "Strongly agree"     
+
+```
+
+
+
+
+
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+### <-- AUTOMATIZATION
+
+
+### --> Hierarchical Clustering
+
+library(fpc)
+cboot = clusterboot(d, clustermethod = hclustCBI, method = "ward.D", k = n_clusters)
+model_hclust = cboot$result$result
+# The results are in cboot$result. The output is in cboot$result$result.
+summary(cboot$result)
+# Groups, partition of rows
+y_clust = cboot$result$partition
+# Vector of cluster stabilities, each should be > 0.7.
+cboot$bootmean
+# How many times each cluster was dissolved (in total of 100 iterations).
+cboot$bootbrd
+
+plot(y_clust)
+print_clusters(y_clust, n_clusters, d)
+print(paste("TOTAL WITHIN SS:", wss.total(d, y_clust)))
+
+# Visualising the clusters
+library(cluster)
+fst_index = 1
+snd_index = 2
+clusplot(d[, c(fst_index, snd_index)],
+         y_clust,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 2,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('Clusters'),
+         xlab = colnames(d)[fst_index],
+         ylab = colnames(d)[snd_index])
+
+library(ggplot2)
+princ = prcomp(d)
+nComp = 2
+project = predict(princ, newdata = d)[, 1:nComp]
+project.plus = cbind(as.data.frame(project),
+                     cluster = as.factor(y_clust))
+ggplot(project.plus, aes(x = PC1, y = PC2)) + geom_point(aes(color = cluster, shape = cluster))
+
+### <-- Hierarchical Clustering
+
+
+### --> K-means Clustering
+
+library(fpc)
+cboot = clusterboot(clust_survey_data, clustermethod = kmeansCBI, k = n_clusters)
+model_kmeans = cboot$result$result
+# The results are in cboot$result. The output is in cboot$result$result.
+summary(cboot$result)
+# Groups, partition of rows
+y_clust = cboot$result$partition
+# Vector of cluster stabilities, each should be > 0.7.
+cboot$bootmean
+# How many times each cluster was dissolved (in total of 100 iterations).
+cboot$bootbrd
+
+plot(y_clust)
+print_clusters(y_clust, n_clusters, d)
+print(paste("TOTAL WITHIN SS:", wss.total(d, y_clust)))
+
+# Visualising the clusters
+library(cluster)
+fst_index = 3
+snd_index = 4
+clusplot(d[, c(fst_index, snd_index)],
+         y_clust,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 2,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('Clusters'),
+         xlab = colnames(d)[fst_index],
+         ylab = colnames(d)[snd_index])
+
+library(ggplot2)
+princ = prcomp(d)
+nComp = 2
+project = predict(princ, newdata = d)[, 1:nComp]
+project.plus = cbind(as.data.frame(project),
+                     cluster = as.factor(y_clust))
+ggplot(project.plus, aes(x = PC1, y = PC2)) + geom_point(aes(color = cluster, shape = cluster))
+
+### <-- K-means Clustering
+
+
+### --> MCLUST
+# Uses only numeric data!
+
+library(mclust)
+
+df = d
+for (v in colnames(d)) {
+  if (is.numeric(d[[v]])) {
+    df[[v]] = d[[v]]
+  } else if (is.factor(d[[v]])) {
+    df[[v]] = as.numeric(d[[v]])
+  } else {
+    # what to do with other types?
+  }
+}
+
+model_mclust = Mclust(df, G = n_clusters)
+
+#summary(model_mclust)
+# Groups, partition of rows
+y_clust = model_mclust$classification
+
+plot(y_clust)
+print_clusters(y_clust, n_clusters, d)
+print(paste("TOTAL WITHIN SS:", wss.total(d, y_clust)))
+
+# Visualising the clusters
+library(cluster)
+fst_index = 2
+snd_index = 5
+clusplot(d[, c(fst_index, snd_index)],
+         y_clust,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 2,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('Clusters'),
+         xlab = colnames(d)[fst_index],
+         ylab = colnames(d)[snd_index])
+
+library(ggplot2)
+princ = prcomp(d)
+nComp = 2
+project = predict(princ, newdata = d)[, 1:nComp]
+project.plus = cbind(as.data.frame(project),
+                     cluster = as.factor(y_clust))
+ggplot(project.plus, aes(x = PC1, y = PC2)) + geom_point(aes(color = cluster, shape = cluster))
+
+
+### <-- MCLUST
+
+
+### --> POLCA
+# Works with only factor variables!
+
+df = d
+for (v in colnames(d)) {
+  if (is.factor(d[[v]])) {
+    df[[v]] = d[[v]]
+  } else if (is.numeric(d[[v]])) {
+    df[[v]] = factor(ifelse(d[[v]] < median(d[[v]]), 1, 2))
+  } else {
+    # what to do with other types?
+  }
+}
+
+library(poLCA)
+fff = paste(paste("cbind(", paste(colnames(df), collapse = ","), sep=""), ") ~ 1", sep = "")
+model_polca = poLCA(as.formula(fff), data = df, nclass = n_clusters)
+
+model_polca$bic
+model_polca$aic
+
+# Groups, partition of rows
+y_clust = model_polca$predclass
+
+plot(y_clust)
+print_clusters(y_clust, n_clusters, d)
+print(paste("TOTAL WITHIN SS:", wss.total(d, y_clust)))
+
+# Visualising the clusters
+library(cluster)
+fst_index = 2
+snd_index = 5
+clusplot(d[, c(fst_index, snd_index)],
+         y_clust,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 2,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('Clusters'),
+         xlab = colnames(d)[fst_index],
+         ylab = colnames(d)[snd_index])
+
+library(ggplot2)
+princ = prcomp(d)
+nComp = 2
+project = predict(princ, newdata = d)[, 1:nComp]
+project.plus = cbind(as.data.frame(project),
+                     cluster = as.factor(y_clust))
+ggplot(project.plus, aes(x = PC1, y = PC2)) + geom_point(aes(color = cluster, shape = cluster))
+
+### <-- POLCA
+
+
+### --> Comparing clusterings
+
+library(fpc)
+cluster.stats(d, cboot$partition, model_mclust$classification)
+
+kmeans_bic = function (fit) {
+  m = ncol(fit$centers)
+  n = length(fit$cluster)
+  k = nrow(fit$centers)
+  D = fit$tot.withinss
+  return(D + log(n) * m * k)
+}
+print(paste(kmeans_bic(model_kmeans), model_mclust$bic))
+
+### --> Comparing clusterings
+
+
+
+
+
+
+
 
 
 ```
