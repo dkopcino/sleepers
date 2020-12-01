@@ -8,7 +8,20 @@ Description: This package provides functionality to analyze survey data provided
     sleeping problems.
 Imports:
     MASS,
-    dplyr
+    dplyr,
+    stats,
+    haven,
+    dplyr,
+    stringr,
+    ggplot2,
+    gridExtra,
+    tibble,
+    brant,
+    caret,
+    pscl,
+    openxlsx,
+    fpc,
+    e1071
 License: GPL-2
 Encoding: UTF-8
 LazyData: true

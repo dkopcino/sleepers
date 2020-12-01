@@ -23,11 +23,11 @@ knitr::opts_chunk$set(
 # file names
 experiment_data_file = "../inst/extdata/experiment_data.sav"
 survey_data_file = "../inst/extdata/survey_data.sav"
-sleepers_model_file = "sleepers.plr.RDS"
-buyer_correlated_file = "buyer.correlated.RDS"
-buyer_model_file = "buyer.glm.RDS"
-buyer_best_personals_file = "buyer_best_personals.xlsx"
-cluster_model_file = "buyer.cluster.RDS"
+sleepers_model_file = "../data/sleepers.plr.RDS"
+buyer_correlated_file = "../data/buyer.correlated.RDS"
+buyer_model_file = "../data/buyer.glm.RDS"
+buyer_best_personals_file = "../data/buyer_best_personals.xlsx"
+cluster_model_file = "../data/buyer.cluster.RDS"
 
 ```
 
@@ -293,9 +293,9 @@ rownames(sumtable)[intercepts_rows] = paste0("Intercept_", rownames(sumtable)[in
 # now adding p-values and significance, it is a usual way to display the results, don't know why polr doesn't have it
 sumtable$p.value = pt(abs(sumtable$t.value), sleepers.plr$nobs - sleepers.plr$edf, lower.tail = FALSE) * 2
 sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
-sumtable[sumtable$p.value < .05, ]$signif = "*"
-sumtable[sumtable$p.value < .01, ]$signif = "**"
-sumtable[sumtable$p.value < .001, ]$signif = "***"
+if (any(sumtable$p.value < .05)) sumtable[sumtable$p.value < .05, ]$signif = "*"
+if (any(sumtable$p.value < .01)) sumtable[sumtable$p.value < .01, ]$signif = "**"
+if (any(sumtable$p.value < .001)) sumtable[sumtable$p.value < .001, ]$signif = "***"
 sumtable$odds_effect = exp(sumtable$Value)
 sumtable$explanation = "" # create a column
 negative_odds_effect = (sumtable$odds_effect < 1)
@@ -317,6 +317,9 @@ numeric_columns = !(colnames(sumtable) %in% c("signif", "explanation"))
 sumtable[, numeric_columns] = lapply(sumtable[, numeric_columns], as.numeric)
 
 #sumtable_cis = confint(sleepers.plr)
+
+
+library(tibble)
 
 sumtable[, c("Value", "p.value", "signif", "odds_effect")] %>% tibble::rownames_to_column("rnames") %>% mutate(rnames = substr(rnames, 1, 30), odds_effect = format(odds_effect, digits = 3)) %>% tibble::column_to_rownames("rnames")
 
@@ -565,9 +568,9 @@ if (file.exists(buyer_model_file)) {
 
 sumtable.buyer.glm = data.frame((summary(buyer.glm))$coefficients)
 sumtable.buyer.glm$signif = ifelse(sumtable.buyer.glm$Pr...z.. < .1, ".", "")
-sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .05, ]$signif = "*"
-sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .01, ]$signif = "**"
-sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .001, ]$signif = "***"
+if (any(sumtable.buyer.glm$Pr...z.. < .05)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .05, ]$signif = "*"
+if (any(sumtable.buyer.glm$Pr...z.. < .01)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .01, ]$signif = "**"
+if (any(sumtable.buyer.glm$Pr...z.. < .001)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .001, ]$signif = "***"
 sumtable.buyer.glm$odds_effect = exp(sumtable.buyer.glm$Estimate)
 sumtable.buyer.glm$explanation = "" # create a column
 negative_odds_effect = (sumtable.buyer.glm$odds_effect < 1)
@@ -680,7 +683,8 @@ best_personals[, numeric_columns] = lapply(best_personals[, numeric_columns], as
 # are these buyers?
 #table(buyer_survey_data[fnd_indices_intersect, ]$buyer_f)
 
-openxlsx::write.xlsx(best_personals, buyer_best_personals_file)
+library(openxlsx)
+write.xlsx(best_personals, buyer_best_personals_file)
 
 # printout details and the total effect on odds for the best answers
 total_odds_effect = prod(best_personals[best_personals$personal > 0, ]$odds_effect)
