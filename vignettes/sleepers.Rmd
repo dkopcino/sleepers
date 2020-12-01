@@ -163,6 +163,10 @@ If this was not panel data we could conclude that the attributes are simply not 
 
 That is why we will **exclude** the answers given by these people from the further analysis. This doesn't mean that these respondents shouldn't be further contacted or similar (especially those that always wanted to buy), but for the sake of this analysis their answers are invalid.
 
+
+*Note: we tried using all the data, but got results similar to the ones in the sequel.*
+
+
 ```{r}
 
 experiment_data = experiment_data[experiment_data$response_id %in% rank_1[!always_the_same_answer, "response_id", drop = TRUE], ]
@@ -214,7 +218,7 @@ cutlabelsN = function(x, N = 10) {
 cutlabels5 = function(x) cutlabelsN(x, 5)
 
 plot_rvar = function(rvar, df) {
-  rank_1 = df[!is.na(df[[rvar]]), ] %>% group_by(get(rvar)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2))
+  rank_1 = df[!is.na(df[[rvar]]), ] %>% group_by(get(rvar)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2), .groups = 'keep')
   colnames(rank_1)[1] = rvar
   label_fill = rep("gray", length(rank_1$avg_buying_intent))
   label_fill[rank_1$avg_buying_intent == max(rank_1$avg_buying_intent)] = "red"
@@ -244,7 +248,7 @@ ggi2 = lapply(1:ncol(two_atts_combs), function(two_atts_i) {
   #print(paste0(fst_att, ", ", snd_att))
   fst_levs = levels(experiment_data[[fst_att]])
   snd_levs = levels(experiment_data[[snd_att]])
-  rank_1 = experiment_data[!is.na(experiment_data[[fst_att]]) & !is.na(experiment_data[[snd_att]]), ] %>% group_by(get(fst_att), get(snd_att)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2))
+  rank_1 = experiment_data[!is.na(experiment_data[[fst_att]]) & !is.na(experiment_data[[snd_att]]), ] %>% group_by(get(fst_att), get(snd_att)) %>% summarise(avg_buying_intent = round(mean(as.numeric(answer)), 2), .groups = 'keep')
   if (nrow(rank_1) == 0) return(NULL)
   colnames(rank_1)[1:2] = c(fst_att, snd_att)
   label_fill = rep("gray", length(rank_1$avg_buying_intent))
@@ -776,7 +780,7 @@ table(buyer_survey_data$buyer_f, buyer_survey_data$clustering)
 
 ```
 
-Cluster 2 has a majority non-buyers. Cluster 1 has a majority of buyers, although not so much prevailing.
+Cluster 1 has a majority non-buyers. Cluster 2 has a majority of buyers, although not so much prevailing.
 
 Now we will compare the variables identified as the most important in predicting buyers in the previous section with respect to the clusters we just created. These variables (and their levels) are:
 
@@ -824,8 +828,8 @@ We also looked at the clustering with respect to the other variables, that previ
 ```{r message = FALSE, error = FALSE, warning = FALSE, fig.height = 4.3, fig.width = 7, fig.align = "center"}
 
 
-#ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
-ggi = lapply(c("interst_cbt", "past_coach", "interest_coach", "d_parent", "d_employment", "s_age"), 
+ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
+#ggi = lapply(c("interst_cbt", "past_coach", "interest_coach", "d_parent", "d_employment", "s_age"), 
              function(cn) {
                ggplot(data = buyer_survey_data, aes(x = get(cn), fill = clustering)) + geom_bar(position = "dodge") + scale_x_discrete(labels = cutlabels5) + xlab(cn)
              }
@@ -845,6 +849,7 @@ All together, here are all the variables and levels that have a high probability
 * *source_17:None*
 * *d_child_older:Two*
 * *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern*
+* *d_urban:Urban (An area that is commonly within a town or city with a large population)*
 * *interest_cbt:Very interested*
 * *past_coach:Yes*
 * *interest_coach:Very interested*
