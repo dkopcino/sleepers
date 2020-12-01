@@ -1,3 +1,13 @@
+#' Transform cumulative probabilities (distribution) into single probabilities.
+#'
+#' Transform cumulative probabilities (distribution) into single probabilities.
+#' Adds 1 at the end and calculates differences respectively.
+#'
+#' @seealso \code{\link{invlogit}}
+#'
+#' @param cumprobs A vector of cumulative probabilities (without the last 1).
+#' @param nms Optional, names of the probabilities values.
+#' @return Vector of single probabilities.
 print_clusters <- function(labels, k, d) {
   for(i in 1:k) {
     print(paste("cluster", i))
