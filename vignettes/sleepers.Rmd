@@ -3,6 +3,7 @@ title: "Sleepers"
 author: "Danijel Kopčinović"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
+#output: pdf_document
 vignette: >
   %\VignetteIndexEntry{Sleepers}
   %\VignetteEngine{knitr::rmarkdown}
@@ -24,6 +25,7 @@ knitr::opts_chunk$set(
 experiment_data_file = "../inst/extdata/experiment_data.sav"
 survey_data_file = "../inst/extdata/survey_data.sav"
 sleepers_model_file = "../data/sleepers.plr.RDS"
+sleepers_final_model_file = "../data/sleepers.plr.final.RDS"
 buyer_correlated_file = "../data/buyer.correlated.RDS"
 buyer_model_file = "../data/buyer.glm.RDS"
 buyer_best_personals_file = "../data/buyer_best_personals.xlsx"
@@ -69,13 +71,12 @@ min_experiment_data_duration = min(experiment_data$duration)
 max_experiment_data_duration = max(experiment_data$duration)
 experiment_data$duration = (experiment_data$duration - min_experiment_data_duration)/(max_experiment_data_duration - min_experiment_data_duration)
 
-# cast price to numeric and normalize it to 0-1 range
+# cast price to numeric and make logarithm
 # price has 3 values c("$20/month", "$30/month", "$40/month") and these are equidistant
-# we want to capture the ordering of these values and allow for other values too
+# we want to capture the ordering of these values on logarithmic scale (usually better for prices because
+# it givess smaller difference on higher prices than on lower prices - more realistic) and allow for other values too
 experiment_data$price = as.numeric(gsub("\\$", "", unlist(lapply(str_split(experiment_data$price, "/month(s)*"), "[[", 1))))
-min_experiment_data_price = min(experiment_data$price)
-max_experiment_data_price = max(experiment_data$price)
-experiment_data$price = (experiment_data$price - min_experiment_data_price)/(max_experiment_data_price - min_experiment_data_price)
+experiment_data$log_price = log(experiment_data$price)
 
 # answer has only numbers and we want to have text descriptions
 levels(experiment_data$answer) = c("Very unlikely", "Somewhat unlikely", "Somewhat likely", "Very likely")
@@ -95,7 +96,8 @@ predict_transform = function(new_data) {
   new_data$duration = as.numeric(unlist(lapply(str_split(new_data$duration, "[[:space:]]+month(s)*"), "[[", 1)))
   new_data$duration = (new_data$duration - min_experiment_data_duration)/(max_experiment_data_duration - min_experiment_data_duration)
   new_data$price = as.numeric(gsub("\\$", "", unlist(lapply(str_split(new_data$price, "/month(s)*"), "[[", 1))))
-  new_data$price = (new_data$price - min_experiment_data_price)/(max_experiment_data_price - min_experiment_data_price)
+  new_data$log_price = log(new_data$price)
+  #new_data$price = (new_data$price - min_experiment_data_price)/(max_experiment_data_price - min_experiment_data_price)
   new_data
 }
 
@@ -164,7 +166,7 @@ If this was not panel data we could conclude that the attributes are simply not 
 That is why we will **exclude** the answers given by these people from the further analysis. This doesn't mean that these respondents shouldn't be further contacted or similar (especially those that always wanted to buy), but for the sake of this analysis their answers are invalid.
 
 
-*Note: we tried using all the data, but got results similar to the ones in the sequel.*
+*Note: we tried using all the data, but the results were much statisically weaker (e.g. much larger AIC) as expected.*
 
 
 ```{r}
@@ -231,7 +233,9 @@ marrangeGrob(ggi, nrow = 3, ncol = 2)
 ```
 
 
-We can see that the *price* attribute levels show relatively clear trend (higher buying intent for lower price, lower buying intent for higher price). This is expected and shows that we don't have strange behavior. 
+We can see that the *price* attribute levels show relatively clear trend (higher buying intent for lower price, lower buying intent for higher price). This is expected and shows that we don't have strange behavior.
+
+We will transform the *price* attribute to numeric to capture other possible values (which are not used in this experiment). We will also transform the *price* to its logarithm because it better captures the buyers behavior (smaller difference between higher prices than between smaller prices).
 
 With other attributes, we can't see such a clear trend.
 
@@ -264,7 +268,7 @@ marrangeGrob(ggi2, nrow = 2, ncol = 2)
 ```
 
 
-We can see that the following combinations of attributes have somewhat bigger difference between the smallest (pink) and largest (red) average buying intent: *offer + rtb, offer + price, outcome + price, rtb + price, duration + price, social_proof + price*. This indicates that some of these value combinations could have an interaction effect, where one value combined with another value gives a cumulative (positive or negative) effect on the average buying intent. Thus maybe we should include these combinations in the modeling.
+We can see that some combinations of attributes have somewhat bigger difference between the smallest (pink) and largest (red) average buying intent, e.g. *offer + rtb, offer + price, outcome + price, rtb + price...*. This indicates that some of these combinations could have an interaction effect, where one value combined with another value gives a cumulative (positive or negative) effect on the average buying intent. Thus maybe we should include these combinations in the modeling.
 
 It is now time to build a model. Since our output variable *answer* is an ordinal variable (has comparable values), we will use an ordinal logistic regression model with *answer* as the output variable and all other variables as predictors. 
 
@@ -280,48 +284,18 @@ options(contrasts = c("contr.treatment", "contr.poly"))
 if (file.exists(sleepers_model_file)) {
   sleepers.plr = readRDS(sleepers_model_file)
 } else {
-  sleepers.plr <- polr(answer ~ duration + offer + outcome + price + rtb + social_proof, data = experiment_data, Hess = TRUE)
+  sleepers.plr <- polr(answer ~ duration + offer + outcome + log_price + rtb + social_proof, data = experiment_data, Hess = TRUE)
   # save the model 
   saveRDS(sleepers.plr, sleepers_model_file)
 }
 
 #logLik(sleepers.plr)
 
-# all coefficients together, intercepts too, with estimate, std. error and t value
-sumtable = data.frame((summary(sleepers.plr))$coefficients)
-# # round to 3 digits
-# sumtable[, colnames(sumtable)] = lapply(sumtable, round, digits = 3)
-# last few coefficients are intercepts, let's emphasize that
-intercepts_rows = nrow(sumtable) - ((length(sleepers.plr$zeta) - 1):0)
-rownames(sumtable)[intercepts_rows] = paste0("Intercept_", rownames(sumtable)[intercepts_rows])
-# now adding p-values and significance, it is a usual way to display the results, don't know why polr doesn't have it
-sumtable$p.value = pt(abs(sumtable$t.value), sleepers.plr$nobs - sleepers.plr$edf, lower.tail = FALSE) * 2
-sumtable$signif = ifelse(sumtable$p.value < .1, ".", "")
-if (any(sumtable$p.value < .05)) sumtable[sumtable$p.value < .05, ]$signif = "*"
-if (any(sumtable$p.value < .01)) sumtable[sumtable$p.value < .01, ]$signif = "**"
-if (any(sumtable$p.value < .001)) sumtable[sumtable$p.value < .001, ]$signif = "***"
-sumtable$odds_effect = exp(sumtable$Value)
-sumtable$explanation = "" # create a column
-negative_odds_effect = (sumtable$odds_effect < 1)
-sumtable[negative_odds_effect, ]$explanation = paste0("decrease buying odds by factor ", format(abs(sumtable[negative_odds_effect, ]$odds_effect), digits = 6))
-sumtable[!negative_odds_effect, ]$explanation = paste0("increase buying odds by factor ", format(sumtable[!negative_odds_effect, ]$odds_effect, digits = 6))
+source("../R/summary_helper.R")
 
-# add reference levels for a clearer picture
-for (an in c("offer", "outcome", "rtb", "social_proof")) {
-  an_rows = grep(an, rownames(sumtable))
-  sumtable = rbind(sumtable[1:(min(an_rows)-1), ], 
-                   c(0, 0, 0, 1, "", 1, "reference level, no effect"),
-                   sumtable[min(an_rows):nrow(sumtable), ]
-                   )
-  rownames(sumtable)[min(an_rows)] = paste0(an, levels(experiment_data[[an]])[1], ", ref. level")
-}
-
-# have to convert back to numeric, don't know why the columns were converted to character in the loop above
-numeric_columns = !(colnames(sumtable) %in% c("signif", "explanation"))
-sumtable[, numeric_columns] = lapply(sumtable[, numeric_columns], as.numeric)
+sumtable = get_summary_table_for_polr_model(sleepers.plr, experiment_data[1, c("offer", "outcome", "rtb", "social_proof"), drop = FALSE])
 
 #sumtable_cis = confint(sleepers.plr)
-
 
 library(tibble)
 
@@ -333,39 +307,29 @@ sumtable[, c("Value", "p.value", "signif", "odds_effect")] %>% tibble::rownames_
 
 Each coefficient represents attribute value (numeric or a level). Without getting into too many details about this output format, we can see (from *signif* column) that only `r paste0(rownames(sumtable[sumtable$signif != "", ]), collapse = ", ")` coefficients are significant (not 0 with high probability).
 
-Negative coefficients in the table above mean that increasing the corresponding attribute value reduces the odds of the buying intent and vice versa - positive coefficients mean that increasing the corresponding attribute value increases the odds of the buying intent. So e.g. increasing *price* (with its negative coefficient `r sumtable["price", "Value"]`) reduces the buying intent while giving *scientific evidence* in *social_proof* (with its positive coefficient `r sumtable["social_proofscientific evidence", "Value"]`) increases the buying intent compared with the *`r levels(experiment_data$social_proof)[1]`*.
+Negative coefficients in the table above mean that increasing the corresponding attribute value reduces the odds of the buying intent and vice versa - positive coefficients mean that increasing the corresponding attribute value increases the odds of the buying intent. So e.g. increasing *price* (with its negative coefficient `r sumtable["price", "Value"]`) reduces the buying intent while giving "scientific evidence" in *social_proof* (with its positive coefficient `r sumtable["social_proofscientific evidence", "Value"]`) increases the buying intent compared with the "*`r levels(experiment_data$social_proof)[1]`*".
 
-The coefficients ("Value") in the table are given on a logarithmic scale, so to find how they affect the odds of buying intent, we have to exponentiate them. This is the "odds_effect" column. If this number is < 1, the attribute value decreases the odds of buying. If this number is > 1, the attribute value increases the odds of buying.
+The following coefficients are significant and decrease the buying odds: `r paste0(rownames(sumtable[(sumtable$signif != "") && (sumtable$Value < 0), ]), collapse = ", ")`.
 
-Taking everything into account, we have the following attribute values with their effect on buying odds as just described:
+The following coefficients are significant and increase the buying odds: `r paste0(rownames(sumtable[(sumtable$signif != "") && (sumtable$Value > 0), ]), collapse = ", ")`.
 
-```{r}
+*duration* is not significant, so it has no impact on buying odds.
 
-sumtable[(grepl("Interc", rownames(sumtable)) == FALSE), c("odds_effect", "explanation")] %>% tibble::rownames_to_column("rnames") %>% mutate(rnames = substr(rnames, 1, 25)) %>%  mutate(odds_effect = format(odds_effect, digits = 3)) %>% tibble::column_to_rownames("rnames")
+*offer* has no significant values, so it has no impact on buying odds.
 
-```
+*outcome* has no significant values, so it has no impact on buying odds.
 
+*log_price* is significant with a negative coefficient, so lower log_price (meaning lower price) increases buying odds, while higher log_price (meaning higher price) decreases buying odds. This is natural and expected.
 
-Since we built an ordinal regression model, we have to check its main assumption (parallel regression assumption, a.k.a. the proportional odds assumption).
+*rtb* is significant on a few values, but the coefficients are negative, so respondents prefer `r levels(experiment_data$rtb)[1]` than the other values.
 
+*social_proof* is significant on a value "scientific evidence" and the coefficient is positive, so respondents prefer "scientific evidence" than the other values.
 
-```{r message=FALSE, warning=FALSE, error=FALSE}
+All intercepts are significant and negative which shows that when all attributes are at 0 or at their first level, respondents tend to be more willing to buy than not to buy. So negative coefficients increase buying odds - this is contrary to the other coefficients but it's due to some historical notation reasons. But since intercepts are not something we can control, we will focus on the non-intercept coefficients.
 
-library(brant)
-brant(sleepers.plr)
+All coefficients are given on a logarithmic scale, so to find how they really **affect the odds** of buying intent, we have to exponentiate them. This is the "odds_effect" column. If this number is < 1, the attribute value decreases the odds of buying. If this number is > 1, the attribute value increases the odds of buying.
 
-```
-
-
-Looking at the probability column (it's the 3rd number in each row, some are moved to left because of an error in tabulating the output), we can see that all coefficients except *price* and *Omnibus* have probability of the assumption H0 above 0.05 (5%). This means that we can trust the H0 and the modeling assumption holds for these coefficients.
-
-We ignore the *Omnibus* 0 probability because it's essentially a product of all the other probabilities and thus very small by default.
-
-*Price* doesn't follow the proportional odds assumption, but this is expected, because influence of the price on the buying intent is not proportional, e.g. a higher price will affect the difference between *Somewhat unlikely* and *Very unlikely* less than the difference between *Very likely* and *Somewhat likely*.
-
-Thus altogether we can proceed with the analysis.
-
-Since a lot of coefficients are non significant, we tested if we can remove some variables from the model or improve the model by adding interactions (as explained before with the graphics).
+A lot of coefficients are non significant and a model is better if it has less parameters so we tested if we can remove some variables from the model or improve the model by adding interactions (as explained before with the graphics).
 
 
 ```{r}
@@ -378,8 +342,49 @@ Since a lot of coefficients are non significant, we tested if we can remove some
 ```
 
 
-We found that we could remove *duration* and add the interaction *offer:outcome* but we don't get much improvement (AIC has decreased only around 5). Therefore we rather keep all the variables.
+We found that we could remove *duration, offer, outcome* without losing statistical quality (AIC has actually decreased around 5). Thus our final model summary is:
 
+
+```{r}
+
+if (file.exists(sleepers_final_model_file)) {
+  sleepers.plr.final = readRDS(sleepers_final_model_file)
+} else {
+  sleepers.plr.final <- polr(answer ~ log_price + rtb + social_proof, data = experiment_data, Hess = TRUE)
+  # save the model 
+  saveRDS(sleepers.plr.final, sleepers_final_model_file)
+}
+
+#logLik(sleepers.plr.final)
+
+sumtable = get_summary_table_for_polr_model(sleepers.plr.final, experiment_data[1, c("rtb", "social_proof"), drop = FALSE])
+
+#sumtable_cis = confint(sleepers.plr.final)
+
+sumtable[, c("signif", "explanation")] %>% tibble::rownames_to_column("rnames") %>% mutate(rnames = substr(rnames, 1, 30)) %>% tibble::column_to_rownames("rnames")
+
+
+```
+
+
+Since we built an ordinal regression model, we have to check its main assumption (parallel regression assumption, a.k.a. the proportional odds assumption).
+
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+
+library(brant)
+brant(sleepers.plr.final)
+
+```
+
+
+Looking at the probability column (it's the 3rd number in each row, some are moved to left because of an error in tabulating the output), we can see that all coefficients except *log_price* and *Omnibus* have probability of the assumption H0 at least 0.05 (5%). This means that we can trust the H0 and the modeling assumption holds for these coefficients.
+
+We ignore the *Omnibus* 0 probability because it's essentially a product of all the other probabilities and thus very small by default.
+
+*log_price* doesn't follow the proportional odds assumption, but this is expected, because influence of the price on the buying intent is not proportional, e.g. a higher price will affect the difference between *Somewhat unlikely* and *Very unlikely* less than the difference between *Very likely* and *Somewhat likely*.
+
+Thus altogether we can proceed with the analysis.
 
 ```{r}
 
@@ -394,7 +399,7 @@ We found that we could remove *duration* and add the interaction *offer:outcome*
 To check how our model works on the existing data, we ran a check with the following result:
 
 
-```{r}
+```{r error = FALSE, message = FALSE, warning = FALSE}
 
 new_data = read_sav(experiment_data_file)
 new_data = predict_transform(new_data)
@@ -405,7 +410,7 @@ new_data = new_data[new_data$response_id %in% rank_1[!always_the_same_answer, "r
 # note: this never gives the Very likely answer
 #new_data_predicted_class = predict(sleepers.plr, new_data, type = "class")
 # or do we want to take probabilities and make sample with these probabilities to determine class?
-new_data_predicted_probs = predict(sleepers.plr, new_data, type = "p")
+new_data_predicted_probs = predict(sleepers.plr.final, new_data, type = "p")
 new_data_predicted_class = unlist(lapply(1:nrow(new_data_predicted_probs),function(i) sample(colnames(new_data_predicted_probs), 1, replace = TRUE, prob = new_data_predicted_probs[i, ])))
 new_data_predicted_class = factor(new_data_predicted_class, levels = levels(experiment_data$answer))
 
@@ -415,7 +420,7 @@ confusionMatrix(new_data_predicted_class, new_data$answer)
 ```
 
 
-Overall accuracy (around 25%) is not too good which indicates that the given attributes are not very good predictors of buying intent.
+Overall accuracy (around 26%) is not too good which indicates that the given attributes are not very good predictors of buying intent.
 
 
 ## The Best Message
@@ -423,13 +428,14 @@ Overall accuracy (around 25%) is not too good which indicates that the given att
 
 Summing everything up, the best marketing message would consist of:
 
-* Duration: **12 months**
-* Offer: **improve your health for the long-run**
-* Outcome: **breaking bad habits and creating new routines**
+* Duration: **12 months** (or any other value because it did not have a significant impact, but a longer value of duration would benefit the application seller)
+* Offer: **improve your health for the long-run** (or any other value because it did not have a significant impact)
+* Outcome: **breaking bad habits and creating new routines** (or any other value because it did not have a significant impact)
 * Price: **$20/month**
 * Rtb: **a program created just for you** OR **cognitive behavioral therapy**
 * Social proof: **scientific evidence**
 
+The lowest price is the least beneficial for the application seller, but when combined with the longer duration, which did not seem to bother the respondents, the overall benefit would be higher than pushing higher prices with the shorter duration.
 
 
 # Respondents Segmentation and Predicting Buyers
@@ -570,29 +576,7 @@ if (file.exists(buyer_model_file)) {
   saveRDS(buyer.glm, buyer_model_file)
 }
 
-sumtable.buyer.glm = data.frame((summary(buyer.glm))$coefficients)
-sumtable.buyer.glm$signif = ifelse(sumtable.buyer.glm$Pr...z.. < .1, ".", "")
-if (any(sumtable.buyer.glm$Pr...z.. < .05)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .05, ]$signif = "*"
-if (any(sumtable.buyer.glm$Pr...z.. < .01)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .01, ]$signif = "**"
-if (any(sumtable.buyer.glm$Pr...z.. < .001)) sumtable.buyer.glm[sumtable.buyer.glm$Pr...z.. < .001, ]$signif = "***"
-sumtable.buyer.glm$odds_effect = exp(sumtable.buyer.glm$Estimate)
-sumtable.buyer.glm$explanation = "" # create a column
-negative_odds_effect = (sumtable.buyer.glm$odds_effect < 1)
-sumtable.buyer.glm[negative_odds_effect, ]$explanation = paste0("decrease buying odds by factor ", format(abs(sumtable.buyer.glm$odds_effect[negative_odds_effect]), digits = 6))
-sumtable.buyer.glm[!negative_odds_effect, ]$explanation = paste0("increase buying odds by factor ", format(sumtable.buyer.glm$odds_effect[!negative_odds_effect], digits = 6))
-for (an in cns) {
-  #print(an)
-  an_rows = grep(an, rownames(sumtable.buyer.glm))
-  sumtable.buyer.glm = rbind(sumtable.buyer.glm[1:(min(an_rows)-1), ], 
-                             c(0, 0, 0, 1, "", 1, "reference level, no effect"),
-                             sumtable.buyer.glm[min(an_rows):nrow(sumtable.buyer.glm), ]
-                             )
-  rownames(sumtable.buyer.glm)[min(an_rows)] = paste0(an, levels(survey_data[[an]])[1], ", ref. level")
-}
-
-# have to convert back to numeric, don't know why the columns were converted to character in the loop above
-numeric_columns = !(colnames(sumtable.buyer.glm) %in% c("signif", "explanation"))
-sumtable.buyer.glm[, numeric_columns] = lapply(sumtable.buyer.glm[, numeric_columns], as.numeric)
+sumtable.buyer.glm = get_summary_table_for_glm_logistic_model(buyer.glm, survey_data[, cns])
 
 sumtable.buyer.glm[sumtable.buyer.glm$signif != "", c("Estimate", "Pr...z..", "signif", "odds_effect")] %>% tibble::rownames_to_column("rnames") %>% mutate(rnames = substr(rnames, 1, 30), odds_effect = format(odds_effect, digits = 3)) %>% tibble::column_to_rownames("rnames")
 
@@ -700,7 +684,7 @@ best_personals[best_personals$estimate > 0, c("personal", "value", "odds_effect"
 
 Except for these values, there are additional conditions on the other attributes because some values pull the buying odds in the negative direction and thus should be avoided. Because of the size of the table, we saved it in the "buyer_best_personals.xlsx" file.
 
-**So the best approach to target buyers would be to find a target group that satisfies as close as possible the values of the attributes above and in the Excel file.**
+**So the best approach to target buyers would be to find a target group that satisfies the values of the attributes above and in the Excel file.**
 
 
 
@@ -809,27 +793,27 @@ marrangeGrob(ggi, nrow = 3, ncol = 2)
 
 We can see e.g.:
 
-* *m1_philosophy_2:Strongly agree* has much more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *m2_awareness_apps_10:Whoop* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *source_10:Work schedule* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *source_12:Medications* has more cluster 2 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
-* *source_17:None* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_child_older:Two* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_work_hours:Less than 20* has more cluster 2 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
+* *m1_philosophy_2:Strongly agree* has much more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_10:Whoop* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *source_10:Work schedule* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *source_12:Medications* has more cluster 1 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
+* *source_17:None* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *d_child_older:Two* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *d_work_hours:Less than 20* has more cluster 1 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
 
 We can conclude that for the most part our previous conclusions and the new clustering support each other in the "prediction" of buyers. The most obvious miss is with the *d_work_hours:Less than 20*. Perhaps this variable should be taken out of the predictors.
 
-Clustering *d_work_schedule* indicates that all levels except "Don’t know / not applicable" tend to be cluster 1 which are higher probability buyers.
+Clustering *d_work_schedule* indicates that all levels except "Don’t know / not applicable" tend to be cluster 2 which are higher probability buyers.
 
-We also looked at the clustering with respect to the other variables, that previously turned insignificant, in hope that we could find some additional positive predictors for buyers.
+We also looked at the clustering with respect to the other variables that previously turned insignificant, in hope that we could find some additional positive predictors for buyers (from the clustering itself).
 
 
 ```{r message = FALSE, error = FALSE, warning = FALSE, fig.height = 4.3, fig.width = 7, fig.align = "center"}
 
 
-ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
-#ggi = lapply(c("interst_cbt", "past_coach", "interest_coach", "d_parent", "d_employment", "s_age"), 
+#ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
+ggi = lapply(c("interst_cbt", "past_coach", "interest_coach", "d_parent", "d_employment", "s_age"), 
              function(cn) {
                ggplot(data = buyer_survey_data, aes(x = get(cn), fill = clustering)) + geom_bar(position = "dodge") + scale_x_discrete(labels = cutlabels5) + xlab(cn)
              }
@@ -838,7 +822,9 @@ marrangeGrob(ggi, nrow = 3, ncol = 2)
 
 ```
 
-There are some clearly visible values that have more cluster 1 respondents, thus could have a positive influence on the buying odds. But since clustering algorithm was not run as a model for predicting the buyers, we tend to trust the real prediction model that we built before. So we will keep the positive buying predictors from before and add only the levels that have more cluster 1 respondents and that were not negative predictors in the previous model.
+There are some clearly visible values that have more cluster 2 respondents, thus could have a positive influence on the buying odds. But since clustering algorithm was not run as a model for predicting the buyers, we tend to trust the real prediction model that we built before. So we will keep the positive buying predictors from before and add only the levels that have more cluster 2 respondents and that were not negative predictors in the previous model.
+
+## The Best Target Public
 
 All together, here are all the variables and levels that have a high probability of a positive effect on buying odds:
 
@@ -849,7 +835,6 @@ All together, here are all the variables and levels that have a high probability
 * *source_17:None*
 * *d_child_older:Two*
 * *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern*
-* *d_urban:Urban (An area that is commonly within a town or city with a large population)*
 * *interest_cbt:Very interested*
 * *past_coach:Yes*
 * *interest_coach:Very interested*
@@ -857,7 +842,7 @@ All together, here are all the variables and levels that have a high probability
 * *d_employment:Working full time now* and *d_employment:Working part time now*
 * *s_age:18-30*
 
-Looking the these answers, they make pretty much sense: the most probable buyers are younger employed parents who had some previous experience with the therapy and coaching. This sounds like a group that needs a good sleep-helping app.
+Looking the these answers, they make sense: the most probable buyers are younger employed parents with children who had some previous experience with the therapy and coaching. This sounds like a group that needs a good sleep-helping app.
 
 
 # Discussion
