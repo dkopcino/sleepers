@@ -26,8 +26,8 @@ experiment_data_file = "../inst/extdata/experiment_data.sav"
 survey_data_file = "../inst/extdata/survey_data.sav"
 sleepers_model_file = "../data/sleepers.plr.RDS"
 sleepers_final_model_file = "../data/sleepers.plr.final.RDS"
-buyer_correlated_file = "../data/buyer.correlated.RDS"
 buyer_model_file = "../data/buyer.glm.RDS"
+buyer_final_model_file = "../data/buyer.glm.final.RDS"
 buyer_best_personals_file = "../data/buyer_best_personals.xlsx"
 cluster_model_file = "../data/buyer.cluster.RDS"
 
@@ -501,6 +501,10 @@ replaceNAandrefactor("m2_awareness|source|behavior_[[:digit:]]+", "None")
 #summary(survey_data[, grep("behavior_[[:alpha:]]+", colnames(survey_data))])
 replaceNAandrefactor("behavior_[[:alpha:]]+", "I’m not sure")
 
+# awareness_apps have a "None" as a second level, we will change that so "None" will be the 0-level which is more logical
+for (cn in colnames(survey_data)[grep("m2_awareness_apps_", colnames(survey_data))]) {
+  survey_data[[cn]] = factor(survey_data[[cn]], c("None", setdiff(levels(survey_data[[cn]]), "None")))
+}
 
 # order rank_1 by response_id to be able to compare with survey_data
 rank_1 = rank_1[order(rank_1$response_id), ]
@@ -535,37 +539,56 @@ The number of survey variables is large (99) and the number of observations (the
 # remove weights because it seems numeric and it is not clear what it means
 # find columns that have some correlation (chi-squared test) with the buyer flag
 
-if (file.exists(buyer_correlated_file)) {
-  cns = readRDS(buyer_correlated_file)
-} else {
-  cns = c()
-  for (cn in setdiff(colnames(survey_data), c("response_id", "weights"))) {
-    #print(cn)
-    if (max(as.numeric(survey_data[[cn]])) > min(as.numeric(survey_data[[cn]]))) {
-      cst = chisq.test(rank_1$buyer_f, survey_data[[cn]], simulate.p.value = TRUE)
-      if (cst$p.value < 0.001) cns = c(cns, cn)
-    } else {
-      #print(paste0(cn, " has only one value"))
-    }
+cns = c()
+for (cn in setdiff(colnames(survey_data), c("response_id", "weights"))) {
+  #print(cn)
+  if (max(as.numeric(survey_data[[cn]])) > min(as.numeric(survey_data[[cn]]))) {
+    cst = chisq.test(rank_1$buyer_f, survey_data[[cn]], simulate.p.value = TRUE)
+    if (cst$p.value < 0.001) cns = c(cns, cn)
+  } else {
+    #print(paste0(cn, " has only one value"))
   }
-  saveRDS(cns, buyer_correlated_file)
 }
-
-buyer_survey_data = data.frame(buyer_f = rank_1$buyer_f, survey_data[, cns])
-buyer_survey_data$buyer = as.numeric(buyer_survey_data$buyer_f) - 1
 
 cns
 
 ```
 
+Another way to see which variables could lead to higher buying probability would be to simply count the number of buyers in different groups, defined by different variables and their levels. Here are the results of such counting analysis, where we kept only the groups with at least 50% of buyers:
+
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+buyer_cns = data.frame()
+for (cn in cns) {
+  buyer_cn = data.frame(table(rank_1$buyer_f, survey_data[[cn]])) %>% group_by(Var2) %>% 
+    summarise(ATT_NAME = cn, BUYERS = Freq[2], PROB_BUYER_PERC = round((Freq[2]/(Freq[2]+Freq[1]))*100), .groups = 'keep') %>% 
+    filter(PROB_BUYER_PERC > 50) %>% rename(ATT_VALUE = Var2) %>% relocate(ATT_NAME) %>% data.frame()
+  if (nrow(buyer_cn) > 0) buyer_cns = rbind(buyer_cns, buyer_cn)
+}
+buyer_cns %>% mutate(ATT_VALUE = substr(ATT_VALUE, 1, 20))
+
+```
+
+
+If the application seller has ability to target the groups defined with above attributes and values, then it is probably the best way to go - these are e.g. people who already used a sleep-helping app, visited a sleep clinic, had a coach that helped them before etc.
+
+But realistically, unless really many people fill the survey as in this project, it is hard to find the members of many of the groups above. Therefore, we will concentrate on more general variables/groups, that could be targeted with e.g. online ads or similar.
+
 
 ## Predicting Buyers
 
+Continuing the discussion in the previous section, we decided to concentrate on the following attributes: *d_urban, s_gender, s_race, d_education, s_hhincome, m2_awareness_apps_1, m2_awareness_apps_4, m2_awareness_apps_5, m2_awareness_apps_6, m2_awareness_apps_7, m2_awareness_apps_8, m2_awareness_apps_9, m2_awareness_apps_10, m2_awareness_apps_11, m2_awareness_apps_12, m2_awareness_apps_13, m2_awareness_apps_14, d_marital, d_h_hnumber, d_parent, d_child_infant, d_child_young, d_child_older, d_politics, d_political_view, d_employment, d_work_schedule, d_work_hours, s_region, s_age*. These variables represent either some general demography and could be targeted via e.g. online ads ("if you have a sleeping problem, try our app") or sleep-helping apps awareness and could again be targeted via application stores (to those that downloaded some app - "try our app").
 
 Now we're set up to build a model that will try to predict if a respondent is a buyer or not from the variables/answers given. We get the following summary (we show only significant estimates because there are too many to show them all):
 
 
 ```{r message = FALSE, error = FALSE, warning = FALSE}
+
+cns = c("d_urban", "s_gender", "s_race", "d_education", "s_hhincome", "m2_awareness_apps_1", "m2_awareness_apps_4", "m2_awareness_apps_5", "m2_awareness_apps_6", "m2_awareness_apps_7", "m2_awareness_apps_8", "m2_awareness_apps_9", "m2_awareness_apps_10", "m2_awareness_apps_11", "m2_awareness_apps_12", "m2_awareness_apps_13", "m2_awareness_apps_14", "d_marital", "d_h_hnumber", "d_parent", "d_child_infant", "d_child_young", "d_child_older", "d_politics", "d_political_view", "d_employment", "d_work_schedule", "d_work_hours", "s_region", "s_age")
+
+buyer_survey_data = data.frame(buyer_f = rank_1$buyer_f, survey_data[, cns])
+buyer_survey_data$buyer = as.numeric(buyer_survey_data$buyer_f) - 1
 
 if (file.exists(buyer_model_file)) {
   buyer.glm = readRDS(buyer_model_file)
@@ -583,6 +606,30 @@ sumtable.buyer.glm[sumtable.buyer.glm$signif != "", c("Estimate", "Pr...z..", "s
 ```
 
 
+As with the experimental data before, we will try to reduce the number of variables without losing statistical quality. We get:
+
+
+```{r message = FALSE, error = FALSE, warning = FALSE}
+
+
+cns = c("d_urban", "m2_awareness_apps_6", "m2_awareness_apps_9", "m2_awareness_apps_10", "m2_awareness_apps_11", "m2_awareness_apps_12", "m2_awareness_apps_13", "m2_awareness_apps_14", "d_parent", "d_politics", "d_work_schedule", "s_age")
+
+if (file.exists(buyer_final_model_file)) {
+  buyer.glm.final = readRDS(buyer_final_model_file)
+} else {
+  buyer.glm.final <- glm(as.formula(paste0("buyer ~ ", paste(cns, collapse = " + "))), 
+                         data = buyer_survey_data, 
+                         family = "binomial")
+  saveRDS(buyer.glm.final, buyer_final_model_file)
+}
+
+sumtable.buyer.glm.final = get_summary_table_for_glm_logistic_model(buyer.glm.final, survey_data[, cns])
+
+sumtable.buyer.glm.final[sumtable.buyer.glm.final$signif != "", c("Estimate", "Pr...z..", "signif", "odds_effect")] %>% tibble::rownames_to_column("rnames") %>% mutate(rnames = substr(rnames, 1, 30), odds_effect = format(odds_effect, digits = 3)) %>% tibble::column_to_rownames("rnames")
+
+```
+
+
 Before continuing with the analysis of the coefficients, we check how does our model work on the existing data:
 
 
@@ -590,8 +637,8 @@ Before continuing with the analysis of the coefficients, we check how does our m
 
 library(pscl)
 library(caret)
-pR2(buyer.glm) # pseudo R-squared to check fit
-predict_probs = predict(buyer.glm, buyer_survey_data, type = "response")
+pR2(buyer.glm.final) # pseudo R-squared to check fit
+predict_probs = predict(buyer.glm.final, buyer_survey_data, type = "response")
 predicted_class = factor(as.numeric(predict_probs > 0.5), levels = c("0", "1"))
 levels(predicted_class) = buyer_levels
 confusionMatrix(data = predicted_class, reference = buyer_survey_data$buyer_f)
@@ -600,9 +647,9 @@ confusionMatrix(data = predicted_class, reference = buyer_survey_data$buyer_f)
 
 ```
 
-McFadden's pseudo R-squared, accuracy and other checks are good, so we can continue with our analysis.
+McFadden's pseudo R-squared, accuracy and other checks are ok, so we can continue with our analysis.
 
-Now that we have coefficients of all variables that occurred in the survey, we can pull out the values of each variable that "pull" the buying odds in the positive direction: 
+Now that we have coefficients of all variables that occurred in the survey, we can pull out the values of each variable that "pull" the buying odds in the positive direction (compared to other values in the same attribute): 
 
 
 ```{r message = FALSE, error = FALSE, warning = FALSE}
@@ -610,9 +657,9 @@ Now that we have coefficients of all variables that occurred in the survey, we c
 # find the values from the possible survey data answers that maximally increase the odds of being a buyer
 best_personals = data.frame()
 for (an in cns) {
-  an_row_indices = grep(paste0("^", an, "[^[:digit:]]"), rownames(sumtable.buyer.glm))
-  if (length(an_row_indices) == 0) an_row_indices = grep(paste0("^", an), rownames(sumtable.buyer.glm))
-  an_rows = sumtable.buyer.glm[an_row_indices, , drop = FALSE]
+  an_row_indices = grep(paste0("^", an, "[^[:digit:]]"), rownames(sumtable.buyer.glm.final))
+  if (length(an_row_indices) == 0) an_row_indices = grep(paste0("^", an), rownames(sumtable.buyer.glm.final))
+  an_rows = sumtable.buyer.glm.final[an_row_indices, , drop = FALSE]
   # we treat all non-significant rows, including the reference level row, as 0
   # if there is no significant row with a positive estimate, we suggest all non-significant rows
   signif_indices = an_rows$Pr...z.. < 0.1
@@ -675,23 +722,33 @@ library(openxlsx)
 write.xlsx(best_personals, buyer_best_personals_file)
 
 # printout details and the total effect on odds for the best answers
-total_odds_effect = prod(best_personals[best_personals$personal > 0, ]$odds_effect)
-best_personals[best_personals$estimate > 0, c("personal", "value", "odds_effect")] %>% mutate(value = substr(value, 1, 20))
+#total_odds_effect = prod(best_personals[best_personals$personal > 0, ]$odds_effect)
+#best_personals[best_personals$estimate > 0, c("personal", "value", "odds_effect")] %>% mutate(value = substr(value, 1, 20))
+best_personals[, c("personal", "value", "odds_effect")] %>% mutate(value = substr(value, 1, 20))
   
 
 ```
 
 
-Except for these values, there are additional conditions on the other attributes because some values pull the buying odds in the negative direction and thus should be avoided. Because of the size of the table, we saved it in the "buyer_best_personals.xlsx" file.
+The results intuitively make sense: higher probability buyers are
 
-**So the best approach to target buyers would be to find a target group that satisfies the values of the attributes above and in the Excel file.**
+* urban (more sleeping problems, more used to using mobile apps), 
+* users of other sleep helping apps (Whoop, Sleep quality, Oura ring, Sleepio), 
+* not users of the FitBit app, 
+* parents, 
+* with fixed working schedule (a lot of work),
+* with rotating work schedule (repetitive changes, harder to get a good sleeping habit), 
+* younger (more inclined to using mobile apps for help).
+
+
+**So the best approach to find buyers in general would be to target people that satisfy the values of the attributes above.**
 
 
 
 ## Clustering Respondents
 
 
-We also tried to cluster the respondents according to the answers given in the survey to see if we can correlate some  segments with the buyers.
+We also tried to cluster the respondents according to the answers given in the survey to see if we can correlate some  segments with the buyers. This was more of a check of the results above because we answered the business question.
 
 The first step in clustering is to define the number of clusters we wish to create. This is usually done with a so called "elbow method". A good guess for the number of clusters is picked at a point where a sudden change in direction (an "elbow") can be seen in the graphs below:
 
@@ -718,7 +775,7 @@ elbow_method(clust_survey_data, k = maximal_k, method = "hclust")
 
 The "WCSS" is a total sum of squares within all the clusters. Where the sudden change in direction of the graph occurs is a probable good guess of the real number of clusters in the data.
 
-The graphs above show an "elbow" for only 2 clusters. So we proceed with 2 clusters. We tried 2 clustering methods - k-means and hierarchical clustering. k-means turned out better in a sense of lesser total sum of squares within all the clusters. 
+The graphs above show an "elbow" only for 2 clusters so we proceed with 2 clusters. We tried 2 clustering methods - k-means and hierarchical clustering. k-means turned out better in a sense of lesser total sum of squares within all the clusters. 
 
 
 ```{r message = FALSE, error = FALSE, warning = FALSE, fig.height = 4.3, fig.width = 7, fig.align = "center"}
@@ -764,7 +821,7 @@ table(buyer_survey_data$buyer_f, buyer_survey_data$clustering)
 
 ```
 
-Cluster 1 has a majority non-buyers. Cluster 2 has a majority of buyers, although not so much prevailing.
+Cluster 2 has a majority non-buyers. Cluster 1 has a majority of buyers, although not so much prevailing.
 
 Now we will compare the variables identified as the most important in predicting buyers in the previous section with respect to the clusters we just created. These variables (and their levels) are:
 
@@ -793,18 +850,16 @@ marrangeGrob(ggi, nrow = 3, ncol = 2)
 
 We can see e.g.:
 
-* *m1_philosophy_2:Strongly agree* has much more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *m2_awareness_apps_10:Whoop* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *source_10:Work schedule* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *source_12:Medications* has more cluster 1 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
-* *source_17:None* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_child_older:Two* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern* has more cluster 2 respondents, which are higher probability buyers. This is consistent with previous conclusions.
-* *d_work_hours:Less than 20* has more cluster 1 respondents, which are lesser probability buyers. This is contrary to the previous conclusion.
+* *d_urban:Urban (An area that is commonly within a town or city with a large population)* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_9:None* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_10:Whoop* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_11:Sleep quality* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_12:Oura ring* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_13:Sleepio* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *m2_awareness_apps_14:None* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
+* *d_parent:Yes* has more cluster 1 respondents, which are higher probability buyers. This is consistent with previous conclusions.
 
-We can conclude that for the most part our previous conclusions and the new clustering support each other in the "prediction" of buyers. The most obvious miss is with the *d_work_hours:Less than 20*. Perhaps this variable should be taken out of the predictors.
-
-Clustering *d_work_schedule* indicates that all levels except "Don’t know / not applicable" tend to be cluster 2 which are higher probability buyers.
+We can conclude that all our previous conclusions and the new clustering support each other in the "prediction" of buyers. 
 
 We also looked at the clustering with respect to the other variables that previously turned insignificant, in hope that we could find some additional positive predictors for buyers (from the clustering itself).
 
@@ -813,36 +868,31 @@ We also looked at the clustering with respect to the other variables that previo
 
 
 #ggi = lapply(setdiff(colnames(buyer_survey_data), c("buyer", "buyer_f", "clustering")), 
-ggi = lapply(c("interst_cbt", "past_coach", "interest_coach", "d_parent", "d_employment", "s_age"), 
+ggi = lapply(c("d_employment", "d_work_schedule", "d_work_hours"), 
              function(cn) {
                ggplot(data = buyer_survey_data, aes(x = get(cn), fill = clustering)) + geom_bar(position = "dodge") + scale_x_discrete(labels = cutlabels5) + xlab(cn)
              }
              )
-marrangeGrob(ggi, nrow = 3, ncol = 2)
+marrangeGrob(ggi, nrow = 2, ncol = 2)
 
 ```
 
-There are some clearly visible values that have more cluster 2 respondents, thus could have a positive influence on the buying odds. But since clustering algorithm was not run as a model for predicting the buyers, we tend to trust the real prediction model that we built before. So we will keep the positive buying predictors from before and add only the levels that have more cluster 2 respondents and that were not negative predictors in the previous model.
+Although some values have clearly more cluster 1 respondents and thus could have a positive influence on the buying odds, we tend to trust the real prediction model that we built before because clustering algorithm was not run as a model for predicting the buyers (but finding similarities) and because there are not many clustering differences, except for those already matched with the prediction model. So we will keep the buying predictors from the prediction model.
+
 
 ## The Best Target Public
 
+
 All together, here are all the variables and levels that have a high probability of a positive effect on buying odds:
 
-* *m1_philosophy_2:Strongly agree*
-* *m2_awareness_apps_10:Whoop*
-* *source_10:Work schedule*
-* *source_12:Medications*
-* *source_17:None*
-* *d_child_older:Two*
-* *d_work_schedule:Rotating work schedule – shift work changes in a repeating pattern*
-* *interest_cbt:Very interested*
-* *past_coach:Yes*
-* *interest_coach:Very interested*
-* *d_parent:Yes*
-* *d_employment:Working full time now* and *d_employment:Working part time now*
-* *s_age:18-30*
-
-Looking the these answers, they make sense: the most probable buyers are younger employed parents with children who had some previous experience with the therapy and coaching. This sounds like a group that needs a good sleep-helping app.
+* *d_urban:Urban (An area that is commonly within a town or city with a large population)*,
+* *m2_awareness_apps_9:None*,
+* *m2_awareness_apps_10:Whoop*,
+* *m2_awareness_apps_11:Sleep quality*,
+* *m2_awareness_apps_12:Oura ring*,
+* *m2_awareness_apps_13:Sleepio*,
+* *m2_awareness_apps_14:None*,
+* *d_parent:Yes*.
 
 
 # Discussion
@@ -851,4 +901,6 @@ Looking the these answers, they make sense: the most probable buyers are younger
 If the survey was choice based instead of ratings based we could make a better analysis, e.g. we would avoid having respondents that always pick the same answer.
 
 It would be better if we had more choice experiment survey data instead of so many demographic survey data (100 variables).
+
+If we had clearer explanations on the survey variables, perhaps it could help in better predictions.
 
